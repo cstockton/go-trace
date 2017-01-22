@@ -1,0 +1,614 @@
+package encoding
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/iotest"
+)
+
+func TestVersionDrift(t *testing.T) {
+	if Latest != Version3 {
+		t.Fatal(`Make sure to update tests where Versions are used.`)
+	}
+}
+
+func TestVersionValid(t *testing.T) {
+	tests := []struct {
+		ver Version
+		exp bool
+	}{
+		{Version1, true},
+		{Version2, true},
+		{Version3, true},
+		{Latest, true},
+		{Latest + 1, false},
+		{Latest + 2, false},
+		{Latest - Latest, false},
+	}
+	for i, test := range tests {
+		t.Logf(`test #%v exp version %q.Valid() to be %v`, i, test.ver, test.exp)
+		if got := test.ver.Valid(); test.exp != got {
+			t.Errorf(`expected version %q.Valid() to be %v, got %v`,
+				test.ver, test.exp, got)
+		}
+	}
+}
+
+func TestVersionComparable(t *testing.T) {
+	order := []Version{0, Version1, Version2, Version3, Version(4), Version(5)}
+	for i, ver := range order {
+		if i > 0 {
+			if older := order[i-1]; older > ver {
+				t.Errorf(`expected Version%d(%q) > Version%[1]d(%[3]q)`, i+1, ver, older)
+			}
+		}
+		if order[i] != ver {
+			t.Errorf(`expected Version%d(%q) == Version%[1]d(%[3]q)`, i+1, ver, order[i])
+		}
+		if i < len(order)-1 {
+			if newer := order[i+1]; newer < ver {
+				t.Errorf(`expected Version%d(%q) < Version%[1]d(%[3]q)`, i+1, ver, newer)
+			}
+		}
+	}
+}
+
+func TestVersionGo(t *testing.T) {
+	tests := []struct {
+		ver Version
+		exp string
+	}{
+		{Version1, `1.5`},
+		{Version2, `1.7`},
+		{Version3, `1.8`},
+		{Latest, `1.8`},
+		{Latest + 1, ``},
+		{Latest + 2, ``},
+		{Latest - Latest, ``},
+	}
+	for i, test := range tests {
+		t.Logf(`test #%v exp version %d Go() to be %v`, i, test.ver, test.exp)
+		if got := test.ver.Go(); test.exp != got {
+			t.Errorf(`expected version %d Go() to be %v, got %v`,
+				test.ver, test.exp, got)
+		}
+	}
+}
+
+func TestVersionTypes(t *testing.T) {
+	tests := []struct {
+		ver Version
+		exp int
+	}{
+		{Version1, 37},
+		{Version2, 41},
+		{Version3, 43},
+		{Latest, int(EvCount)},
+		{Latest + 1, 0},
+		{Latest + 2, 0},
+		{Latest - Latest, 0},
+	}
+	for i, test := range tests {
+		t.Logf(`test #%v exp version %d Types() to have length %v`, i, test.ver, test.exp)
+		types := test.ver.Types()
+
+		if got := len(types); test.exp != got {
+			t.Errorf(`expected version %d Types() to have length %v, got %v`,
+				test.ver, test.exp, got)
+		}
+	}
+}
+
+func TestVersionString(t *testing.T) {
+	tests := []struct {
+		ver Version
+		exp string
+	}{
+		{Version1, `Version(#1 [Go 1.5])`},
+		{Version2, `Version(#2 [Go 1.7])`},
+		{Version3, `Version(#3 [Go 1.8])`},
+		{Latest, `Version(#3 [Go 1.8])`},
+		{Latest + 1, `Version(none)`},
+		{Latest + 2, `Version(none)`},
+		{Latest - Latest, `Version(none)`},
+	}
+	for i, test := range tests {
+		t.Logf(`test #%v exp version %d String() to be %v`, i, test.ver, test.exp)
+		if got := test.ver.String(); test.exp != got {
+			t.Errorf(`expected version %d String() to be %v, got %v`,
+				test.ver, test.exp, got)
+		}
+	}
+}
+
+func runEncodingTest(t *testing.T, tf traceFile, b []byte, r io.Reader) {
+	t.Run(tf.ver.Go()+`/`+tf.Name(), func(t *testing.T) {
+		w := new(bytes.Buffer)
+		dec, enc := NewDecoder(r), NewEncoder(w)
+		dec.init()
+		enc.init()
+		for dec.More() {
+			off := dec.buf.Off()
+			evt, err := dec.Decode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.Reset()
+
+			// Use the comprehensive decoder testing to prove the Encoder correct
+			// through invariant Dec(Enc(Dec(Input)))
+			if tf.ver != Latest {
+				continue
+			}
+
+			src := b[off:dec.buf.Off()]
+			if err := enc.Emit(evt); err != nil {
+				t.Fatalf(`event %v failed with err: %v`, evt, err)
+			}
+			if exp, got := src, w.Bytes(); !bytes.Equal(exp, got) {
+				t.Errorf(`failure for event: %v`, evt)
+				t.Fatalf("output deviation was:\n  dec: %v\n  enc: %v", exp, got)
+			}
+		}
+		if err := dec.Err(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestEncoding(t *testing.T) {
+	for _, traces := range traceMap {
+		for _, tf := range traces {
+			b := tf.Data(t)
+			if b == nil {
+				t.Fatal(`expected non-nil data`)
+			}
+
+			size := tf.size
+			switch {
+			case size < 1e5:
+				// test small traces with a couple iotest readers as well.
+				runEncodingTest(t, tf, b, iotest.HalfReader(bytes.NewReader(b)))
+				runEncodingTest(t, tf, b, iotest.HalfReader(bytes.NewReader(b)))
+				fallthrough
+			case size > 1e5:
+				if testing.Short() {
+					t.Skipf(`Skipping test size %v in short mode.`, size)
+				}
+
+				// test big traces with just a byte reader.
+				runEncodingTest(t, tf, b, bytes.NewReader(b))
+			}
+		}
+	}
+}
+
+func TestEncodingVersion(t *testing.T) {
+	type testEncodingVersion struct {
+		exp  Version
+		from []byte
+		err  interface{}
+	}
+	verFn := func(v string) []byte {
+		b := append([]byte("go "+v+" trace"), []byte{0, 0, 0, 0}...)
+		return b[:16]
+	}
+	tests := []testEncodingVersion{
+		{1, verFn(`1.5`), nil},
+		{2, verFn(`1.7`), nil},
+		{3, verFn(`1.8`), nil},
+		{0, verFn(`1.8.0`), ErrVersion},
+		{0, verFn(`1.4`), ErrVersion},
+		{0, verFn(`1.4.0`), ErrVersion},
+		{0, []byte("\x00go 1.5 trace\x00\x00\x00"), true},
+		{0, []byte("go 1.5 trace\x00 \x00\x00"), true},
+		{0, verFn(``), true},
+		{0, verFn(` `), true},
+		{0, verFn(`   ---`), true},
+		{0, verFn(`1.8---`), true},
+		{0, make([]byte, 17), true},
+		{0, make([]byte, 15), true},
+		{0, verFn(`1.8`)[:15], true},
+		{0, nil, true},
+	}
+	for i, test := range tests {
+		t.Logf("test #%v exp version %q from:\n%v", i, test.exp, string(test.from))
+		var (
+			ver Version
+			err error
+			buf bytes.Buffer
+		)
+		// prove invariant Dec(Enc(Dec(Input)))
+		for from, i := test.from, 0; i < 10; i++ {
+			ver, err = decodeHeader(bytes.NewReader(from))
+			if err = chkErr(test.err, err); err != nil {
+				t.Fatal(err)
+			}
+			if test.err != nil {
+				if ver.Valid() {
+					t.Fatal(`expected invalid version when error is returned`)
+				}
+				if err = encodeHeader(&buf, ver); err == nil {
+					t.Fatalf(`expected err encoding invalid version %q; got nil`, ver)
+				}
+				continue
+			}
+			if ver != test.exp {
+				t.Fatalf(`expected version %q; got %q`, test.exp, ver)
+			}
+			if exp, got := string(test.from[3:6]), ver.Go(); exp != got {
+				t.Fatalf(`expected Go() value %q; got %q`, exp, got)
+			}
+
+			err = encodeHeader(&buf, ver)
+			if err != nil {
+				t.Fatalf(`expected nil err; got %v`, err)
+			}
+			copy(from, buf.Bytes())
+			if len(from) == 0 {
+				t.Fatal(`unexpected zero length data`)
+			}
+		}
+	}
+}
+
+// utility funcs
+
+func makeTrace(t *testing.T, v Version, n int) *bytes.Buffer {
+	if !v.Valid() {
+		t.Fatalf(`invalid version %v:`, v)
+	}
+
+	b := new(bytes.Buffer)
+	if err := encodeHeader(b, v); err != nil {
+		t.Fatal(err)
+	}
+
+	evts := testEvents[v]
+	for i := 0; i < n; i++ {
+		b.Write(evts[i%len(evts)].from)
+	}
+	return b
+}
+
+func makeNonZeroBuf(n int) []byte {
+	b := make([]byte, n)
+	for i := 0; i < n; i++ {
+		b[i] = byte(i)
+		if b[i] == 0 {
+			b[i]++
+		}
+	}
+	return b
+}
+
+func chkErr(exp interface{}, err error) error {
+	expNil := func(v bool) error {
+		if !v && nil == err {
+			return fmt.Errorf(`expected non-nil err; got %q`, err)
+		} else if v && nil != err {
+			return fmt.Errorf(`expected nil err; got %q`, err)
+		}
+		return nil
+	}
+	switch T := exp.(type) {
+	case error:
+		if T != err {
+			return fmt.Errorf(`expected err %q; got %q`, T, err)
+		}
+	case string:
+		if !strings.Contains(err.Error(), T) {
+			return fmt.Errorf(`expected err to contain %q; got %q`, T, err)
+		}
+	case int:
+		return expNil(0 == T)
+	case bool:
+		return expNil(!T)
+	case nil:
+	default:
+		return fmt.Errorf(`bad expected value type %T when checking %q`, T, err)
+	}
+	return nil
+}
+
+type traceFile struct {
+	ver   Version
+	size  int
+	path  string
+	cache []byte
+}
+
+func (tf traceFile) Data(t *testing.T) []byte {
+	if len(tf.cache) == 0 {
+		data, err := ioutil.ReadFile(tf.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf(`loaded trace %v (%v bytes)`, tf.path, len(data))
+		tf.cache = data
+	}
+
+	out := make([]byte, len(tf.cache))
+	copy(out, tf.cache)
+	return out
+}
+
+func (tf traceFile) Name() string {
+	return filepath.Base(tf.path)
+}
+
+type traceFiles []traceFile
+
+func (s traceFiles) BySize(n int) (out traceFiles) {
+	for _, tf := range s {
+		if tf.size < n {
+			out = append(out, tf)
+		}
+	}
+	return
+}
+
+func (s traceFiles) ByName(name string) (out traceFiles) {
+	for _, tf := range s {
+		if strings.Contains(tf.Name(), name) {
+			out = append(out, tf)
+		}
+	}
+	return
+}
+
+func newTraceMap() map[Version]traceFiles {
+	tm := make(map[Version]traceFiles)
+	walkFn := func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+		dir := filepath.Dir(path)
+		valid := strings.HasPrefix(dir, `testdata/go1.`) && len(dir) > 13
+
+		if !valid {
+			return nil
+		}
+		var ver Version
+		switch dir[13] {
+		case '5':
+			ver = Version1
+		case '7':
+			ver = Version2
+		case '8':
+			ver = Version3
+		default:
+			return nil
+		}
+		tm[ver] = append(tm[ver], traceFile{ver, int(info.Size()), path, nil})
+		return nil
+	}
+	filepath.Walk(`testdata`, walkFn)
+	return tm
+}
+
+var traceMap = newTraceMap()
+
+type rwLimiter struct {
+	w   io.Writer
+	r   io.Reader
+	n   int
+	off int
+	err error
+}
+
+func (l *rwLimiter) Write(p []byte) (int, error) {
+	if off := l.off + len(p); off > l.n {
+		return len(p) / 2, l.err
+	}
+	n, err := l.w.Write(p)
+	l.off += n
+	return n, err
+}
+
+func (l *rwLimiter) Read(p []byte) (int, error) {
+	if off := l.off + len(p); off > l.n {
+		return off - l.off, l.err
+	}
+	n, err := l.r.Read(p)
+	l.off += n
+	return n, err
+}
+
+type testDecodeEvent struct {
+	typ  Type
+	exp  []uint64
+	from []byte
+}
+
+var testEvents = [Latest + 1][]testDecodeEvent{
+	nil, testEventsV1, testEventsV2, testEventsV3,
+}
+
+var testEventsV1 = []testDecodeEvent{
+	{EvBatch, []uint64{0x0, 0x1, 0xfe5795b9fd80},
+		[]byte{0x41, 0x0, 0x1, 0x80, 0xfb, 0xe7, 0xad, 0xf9, 0xca, 0x3f}},
+	{EvFrequency, []uint64{0x26a7834, 0x0},
+		[]byte{0x2, 0xb4, 0xf0, 0xa9, 0x13, 0x0}},
+	{EvGomaxprocs, []uint64{0x1, 0x28, 0x30, 0x2},
+		[]byte{0x84, 0x1, 0x28, 0x30, 0x2}},
+	{EvProcStart, []uint64{0x1, 0x4, 0x0}, []byte{0x45, 0x1, 0x4, 0x0}},
+	{EvProcStop, []uint64{0x5, 0x32}, []byte{0x6, 0x5, 0x32}},
+	{EvGCStart, []uint64{0x1, 0x23, 0x8}, []byte{0x47, 0x1, 0x23, 0x8}},
+	{EvGCDone, []uint64{0x1, 0x15}, []byte{0x8, 0x1, 0x15}},
+	{EvGCScanStart, []uint64{0x6, 0x8d8}, []byte{0x9, 0x6, 0xd8, 0x11}},
+	{EvGCScanDone, []uint64{0x8, 0x2b52}, []byte{0xa, 0x8, 0xd2, 0x56}},
+	{EvGCSweepStart, []uint64{0x1, 0x21, 0xa}, []byte{0x4b, 0x1, 0x21, 0xa}},
+	{EvGCSweepDone, []uint64{0x1, 0x57}, []byte{0xc, 0x1, 0x57}},
+	{EvGoCreate, []uint64{0x0, 0x0, 0x1, 0x42d0a0, 0x1},
+		[]byte{0xcd, 0x8, 0x0, 0x0, 0x1, 0xa0, 0xa1, 0x8b, 0x2, 0x1}},
+	{EvGoStart, []uint64{0x1, 0x3, 0x1}, []byte{0x4e, 0x1, 0x3, 0x1}},
+	{EvGoEnd, []uint64{0x25, 0x13d}, []byte{0xf, 0x25, 0xbd, 0x2}},
+	{EvGoStop, []uint64{0x1, 0x12, 0x44}, []byte{0x50, 0x1, 0x12, 0x44}},
+	{EvGoSched, []uint64{0xb, 0x59b, 0x53}, []byte{0x51, 0xb, 0x9b, 0xb, 0x53}},
+	{EvGoPreempt, []uint64{0x8, 0xa6f, 0x45},
+		[]byte{0x52, 0x8, 0xef, 0x14, 0x45}},
+	{EvGoSleep, []uint64{0x1, 0x16, 0x10}, []byte{0x53, 0x1, 0x16, 0x10}},
+	{EvGoBlock, []uint64{0x1, 0x37, 0xc}, []byte{0x54, 0x1, 0x37, 0xc}},
+	{EvGoUnblock, []uint64{0x3, 0xb6, 0xd8, 0x0},
+		[]byte{0x95, 0x3, 0xb6, 0x1, 0xd8, 0x1, 0x0}},
+	{EvGoBlockSend, []uint64{0x1, 0xa5, 0x4d},
+		[]byte{0x56, 0x1, 0xa5, 0x1, 0x4d}},
+	{EvGoBlockRecv, []uint64{0x1, 0x4c, 0x7}, []byte{0x57, 0x1, 0x4c, 0x7}},
+	{EvGoBlockSelect, []uint64{0x1, 0x4c, 0x7}, []byte{0x58, 0x1, 0x4c, 0x7}},
+	{EvGoBlockSync, []uint64{0x4b, 0x291, 0x23},
+		[]byte{0x59, 0x4b, 0x91, 0x5, 0x23}},
+	{EvGoBlockCond, []uint64{0x4b, 0x291, 0x23},
+		[]byte{0x5a, 0x4b, 0x91, 0x5, 0x23}},
+	{EvGoBlockNet, []uint64{0x30, 0x7a9, 0x1b},
+		[]byte{0x5b, 0x30, 0xa9, 0xf, 0x1b}},
+	{EvGoSysCall, []uint64{0x1, 0x6e9, 0x4}, []byte{0x5c, 0x1, 0xe9, 0xd, 0x4}},
+	{EvGoSysExit, []uint64{0x1, 0x80, 0x72, 0x710, 0xfe5795bb1d9d},
+		[]byte{0xdd, 0xd, 0x1, 0x80, 0x1, 0x72, 0x90, 0xe, 0x9d, 0xbb,
+			0xec, 0xad, 0xf9, 0xca, 0x3f}},
+	{EvGoSysBlock, []uint64{0x2, 0x184}, []byte{0x1e, 0x2, 0x84, 0x3}},
+	{EvGoWaiting, []uint64{0x1, 0x3c, 0x2}, []byte{0x5f, 0x1, 0x3c, 0x2}},
+	{EvGoInSyscall, []uint64{0x1, 0x1d, 0x19}, []byte{0x60, 0x1, 0x1d, 0x19}},
+	{EvHeapAlloc, []uint64{0x4, 0x6b9, 0x67d70},
+		[]byte{0x61, 0x4, 0xb9, 0xd, 0xf0, 0xfa, 0x19}},
+	{EvNextGC, []uint64{0x1, 0x5, 0x400000},
+		[]byte{0x62, 0x1, 0x5, 0x80, 0x80, 0x80, 0x2}},
+	{EvTimerGoroutine, []uint64{0x12, 0x0}, []byte{0x23, 0x12, 0x0}},
+	{EvFutileWakeup, []uint64{0x12, 0x0}, []byte{0x24, 0x12, 0x0}},
+}
+
+var testEventsV2 = []testDecodeEvent{
+	{EvBatch, []uint64{0x0, 0xf311f749f4},
+		[]byte{0x41, 0x0, 0xf4, 0x93, 0xdd, 0x8f, 0xb1, 0x1e}},
+	{EvFrequency, []uint64{0x23c496b}, []byte{0x2, 0xeb, 0x92, 0xf1, 0x11}},
+	{EvGomaxprocs, []uint64{0xb4, 0x18, 0x7},
+		[]byte{0x84, 0xb4, 0x1, 0x18, 0x7}},
+	// Stack is separate test
+	{EvProcStart, []uint64{0xb, 0x0}, []byte{0x45, 0xb, 0x0}},
+	{EvProcStop, []uint64{0xc7}, []byte{0x6, 0xc7, 0x1}},
+	{EvGCStart, []uint64{0x1782, 0x7, 0x1a},
+		[]byte{0x87, 0x82, 0x2f, 0x7, 0x1a}},
+	{EvGCDone, []uint64{0x1a}, []byte{0x8, 0x1a}},
+	{EvGCScanStart, []uint64{0x3af}, []byte{0x9, 0xaf, 0x7}},
+	{EvGCScanDone, []uint64{0x341c}, []byte{0xa, 0x9c, 0x68}},
+	{EvGCSweepStart, []uint64{0x35, 0x22}, []byte{0x4b, 0x35, 0x22}},
+	{EvGCSweepDone, []uint64{0x72}, []byte{0xc, 0x72}},
+	{EvGoCreate, []uint64{0x0, 0x1, 0x2, 0x1},
+		[]byte{0xcd, 0x4, 0x0, 0x1, 0x2, 0x1}},
+	{EvGoStart, []uint64{0x9d2, 0x5, 0x1}, []byte{0x8e, 0xd2, 0x13, 0x5, 0x1}},
+	{EvGoEnd, []uint64{0x120}, []byte{0xf, 0xa0, 0x2}},
+	{EvGoStop, []uint64{0x18, 0x5d}, []byte{0x50, 0x18, 0x5d}},
+	{EvGoSched, []uint64{0x33b, 0x12}, []byte{0x51, 0xbb, 0x6, 0x12}},
+	{EvGoPreempt, []uint64{0x2b0, 0x15}, []byte{0x52, 0xb0, 0x5, 0x15}},
+	{EvGoSleep, []uint64{0x2b, 0xf}, []byte{0x53, 0x2b, 0xf}},
+	{EvGoBlock, []uint64{0x2e, 0xb}, []byte{0x54, 0x2e, 0xb}},
+	{EvGoUnblock, []uint64{0x39, 0x5, 0x2, 0x0},
+		[]byte{0xd5, 0x4, 0x39, 0x5, 0x2, 0x0}},
+	{EvGoBlockSend, []uint64{0x26b, 0xe}, []byte{0x56, 0xeb, 0x4, 0xe}},
+	{EvGoBlockRecv, []uint64{0x19c6, 0x41}, []byte{0x57, 0xc6, 0x33, 0x41}},
+	{EvGoBlockSelect, []uint64{0x123, 0x6f}, []byte{0x58, 0xa3, 0x2, 0x6f}},
+	{EvGoBlockSync, []uint64{0x3b, 0x1a}, []byte{0x59, 0x3b, 0x1a}},
+	{EvGoBlockCond, []uint64{0x46e, 0x250d},
+		[]byte{0x5a, 0xee, 0x8, 0x8d, 0x4a}},
+	{EvGoBlockNet, []uint64{0xbb3, 0x4c}, []byte{0x5b, 0xb3, 0x17, 0x4c}},
+	{EvGoSysCall, []uint64{0xfe, 0x10}, []byte{0x5c, 0xfe, 0x1, 0x10}},
+	{EvGoSysExit, []uint64{0x8, 0x5, 0x2, 0x0},
+		[]byte{0xdd, 0x4, 0x8, 0x5, 0x2, 0x0}},
+	{EvGoSysBlock, []uint64{0x653}, []byte{0x1e, 0xd3, 0xc}},
+	{EvGoWaiting, []uint64{0x8, 0x2}, []byte{0x5f, 0x8, 0x2}},
+	{EvGoInSyscall, []uint64{0x13, 0x11}, []byte{0x60, 0x13, 0x11}},
+	{EvHeapAlloc, []uint64{0x2fd, 0xd6000},
+		[]byte{0x61, 0xfd, 0x5, 0x80, 0xc0, 0x35}},
+	{EvNextGC, []uint64{0xa, 0x48f660},
+		[]byte{0x62, 0xa, 0xe0, 0xec, 0xa3, 0x2}},
+	{EvTimerGoroutine, []uint64{0x8}, []byte{0x23, 0x8}},
+	{EvFutileWakeup, []uint64{0x1a}, []byte{0x24, 0x1a}},
+	// String is separate test
+	{EvGoStartLocal, []uint64{0xc, 0x1}, []byte{0x66, 0xc, 0x1}},
+	{EvGoUnblockLocal, []uint64{0x42, 0x1, 0xf}, []byte{0xa7, 0x42, 0x1, 0xf}},
+	{EvGoSysExitLocal, []uint64{0x8, 0x5, 0x2, 0x0},
+		[]byte{0xe8, 0x4, 0x8, 0x5, 0x2, 0x0}},
+}
+
+var testEventsV3 = append(testEventsV2, []testDecodeEvent{
+	{EvGoStartLabel, []uint64{0xb3, 0x23, 0x3, 0x1},
+		[]byte{0xe9, 0x5, 0xb3, 0x1, 0x23, 0x3, 0x1}},
+	{EvGoBlockGC, []uint64{0xc42, 0x2a}, []byte{0x6a, 0xc2, 0x18, 0x2a}},
+}...)
+
+type testEventString struct {
+	id   int
+	exp  string
+	from []byte
+}
+
+var testEventStrings = []testEventString{
+	{1, "GC (dedicated)",
+		[]byte{0x25, 0x1, 0xe, 0x47, 0x43, 0x20, 0x28, 0x64, 0x65, 0x64, 0x69, 0x63,
+			0x61, 0x74, 0x65, 0x64, 0x29}},
+	{2, "GC (fractional)",
+		[]byte{0x25, 0x2, 0xf, 0x47, 0x43, 0x20, 0x28, 0x66, 0x72, 0x61, 0x63, 0x74,
+			0x69, 0x6f, 0x6e, 0x61, 0x6c, 0x29}},
+	{3, "GC (idle)",
+		[]byte{0x25, 0x3, 0x9, 0x47, 0x43, 0x20, 0x28, 0x69, 0x64, 0x6c, 0x65,
+			0x29}},
+	{4, "runtime.timerproc",
+		[]byte{0x25, 0x4, 0x11, 0x72, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x2e,
+			0x74, 0x69, 0x6d, 0x65, 0x72, 0x70, 0x72, 0x6f, 0x63}},
+	{5, "/one/ws/godev/go/src/runtime/time.go",
+		[]byte{0x25, 0x5, 0x24, 0x2f, 0x6f, 0x6e, 0x65, 0x2f, 0x77, 0x73, 0x2f,
+			0x67, 0x6f, 0x64, 0x65, 0x76, 0x2f, 0x67, 0x6f, 0x2f, 0x73, 0x72, 0x63,
+			0x2f, 0x72, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x2f, 0x74, 0x69, 0x6d,
+			0x65, 0x2e, 0x67, 0x6f}},
+	{6, "runtime/trace.Start.func1",
+		[]byte{0x25, 0x6, 0x19, 0x72, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x2f,
+			0x74, 0x72, 0x61, 0x63, 0x65, 0x2e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x2e,
+			0x66, 0x75, 0x6e, 0x63, 0x31}},
+	{7, "/one/ws/godev/go/src/runtime/trace/trace.go",
+		[]byte{0x25, 0x7, 0x2b, 0x2f, 0x6f, 0x6e, 0x65, 0x2f, 0x77, 0x73, 0x2f,
+			0x67, 0x6f, 0x64, 0x65, 0x76, 0x2f, 0x67, 0x6f, 0x2f, 0x73, 0x72, 0x63,
+			0x2f, 0x72, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x2f, 0x74, 0x72, 0x61,
+			0x63, 0x65, 0x2f, 0x74, 0x72, 0x61, 0x63, 0x65, 0x2e, 0x67, 0x6f}},
+}
+
+type testEventStack struct {
+	exp  []uint64
+	from []byte
+}
+
+var testEventStacks = []testEventStack{
+	{[]uint64{0x12, 0x5, 0x42f881, 0x54, 0x44, 0x3a8, 0x4494ee, 0x55,
+		0x30, 0x100, 0x4badd2, 0x8, 0x7, 0x17, 0x5564c3, 0x9, 0xa, 0x182,
+		0x4c0fc3, 0xb, 0xc, 0x290},
+		[]byte{0xc3, 0x29, 0x12, 0x5, 0x81, 0xf1, 0x8b, 0x2, 0x54, 0x44, 0xa8,
+			0x7, 0xee, 0xa9, 0x92, 0x2, 0x55, 0x30, 0x80, 0x2, 0xd2, 0xdb, 0xae,
+			0x2, 0x8, 0x7, 0x17, 0xc3, 0xc9, 0xd5, 0x2, 0x9, 0xa, 0x82, 0x3, 0xc3,
+			0x9f, 0xb0, 0x2, 0xb, 0xc, 0x90, 0x5}},
+	{[]uint64{0xa, 0x1, 0x4190f1, 0x51, 0x52, 0x58e}, []byte{
+		0xc3, 0xa, 0xa, 0x1, 0xf1, 0xa1, 0x86, 0x2, 0x51, 0x52, 0x8e, 0xb}},
+	{[]uint64{0x11, 0x1, 0x557e41, 0x53, 0xa, 0x149}, []byte{
+		0xc3, 0xa, 0x11, 0x1, 0xc1, 0xfc, 0xd5, 0x2, 0x53, 0xa, 0xc9, 0x2}},
+	{[]uint64{0xb, 0x1, 0x557ab1, 0x5b, 0xa, 0xe6}, []byte{
+		0xc3, 0xa, 0xb, 0x1, 0xb1, 0xf5, 0xd5, 0x2, 0x5b, 0xa, 0xe6, 0x1}},
+	{[]uint64{0x1c, 0x9, 0x468f1d, 0x59, 0xe, 0x644, 0x467178, 0x5a, 0x10, 0xde,
+		0x5410ce, 0x2a, 0x14, 0xa5, 0x54068a, 0x15, 0x14, 0x4f, 0x538889, 0x16,
+		0x17, 0xa1, 0x543c39, 0x2b, 0x19, 0x9c, 0x5429b0, 0x2c, 0x2d, 0x127,
+		0x5240e8, 0x2e, 0x1c, 0x22e, 0x5583cf, 0x21, 0xa, 0x15b},
+		[]byte{0xc3, 0x49, 0x1c, 0x9, 0x9d, 0x9e, 0x9a, 0x2, 0x59, 0xe, 0xc4, 0xc,
+			0xf8, 0xe2, 0x99, 0x2, 0x5a, 0x10, 0xde, 0x1, 0xce, 0xa1, 0xd0, 0x2,
+			0x2a, 0x14, 0xa5, 0x1, 0x8a, 0x8d, 0xd0, 0x2, 0x15, 0x14, 0x4f, 0x89,
+			0x91, 0xce, 0x2, 0x16, 0x17, 0xa1, 0x1, 0xb9, 0xf8, 0xd0, 0x2, 0x2b,
+			0x19, 0x9c, 0x1, 0xb0, 0xd3, 0xd0, 0x2, 0x2c, 0x2d, 0xa7, 0x2, 0xe8,
+			0x81, 0xc9, 0x2, 0x2e, 0x1c, 0xae, 0x4, 0xcf, 0x87, 0xd6, 0x2, 0x21,
+			0xa, 0xdb, 0x2}},
+	{[]uint64{0x2, 0x1, 0x42cf21, 0x58, 0x44, 0x6a},
+		[]byte{0xc3, 0x9, 0x2, 0x1, 0xa1, 0x9e, 0x8b, 0x2, 0x58, 0x44, 0x6a}},
+	{[]uint64{0xc, 0x1, 0x557bf1, 0x22, 0xa, 0x118},
+		[]byte{0xc3, 0xa, 0xc, 0x1, 0xf1, 0xf7, 0xd5, 0x2, 0x22, 0xa, 0x98, 0x2}},
+}
