@@ -398,29 +398,29 @@ func runDecodeEventTest(t *testing.T, v Version, tests []testDecodeEvent) {
 			t.Fatalf(`exp %v; got %v`, test.exp, evt.args)
 		}
 	}
+	fns := []decodeFn{
+		decodeEvent, decodeEventVersion1, decodeEventVersion2, decodeEventVersion3}
 	neg := func(t *testing.T, data []byte) {
-		_, r, s := testStateSetup(t, Latest, data)
-		evt, err := decodeEvent(r, s)
-		if err == nil {
-			t.Error(`exp non-nil err`)
-		}
-		if evt != nil {
-			t.Fatalf(`exp nil event; got %v`, evt)
+		for _, fn := range fns {
+			_, r, s := testStateSetup(t, v, data)
+			evt, err := fn(r, s)
+			if err == nil {
+				t.Error(`exp non-nil err`)
+			}
+			if evt != nil {
+				t.Fatalf(`exp nil event; got %v`, evt)
+			}
 		}
 	}
 	t.Run(`Negative`, func(t *testing.T) {
 		for _, test := range tests {
-
-			// Sabotage event type
 			t.Run(`EventType`, func(t *testing.T) {
 				from := make([]byte, len(test.from))
 				copy(from, test.from)
 				from[0] = '0'
 				neg(t, from)
 			})
-
-			// Overflow every value except event type.
-			t.Run(`OverflowArgs`, func(t *testing.T) {
+			t.Run(`ArgsInvalidUleb`, func(t *testing.T) {
 				from := make([]byte, len(test.from))
 				copy(from, test.from[0:1])
 				for i := 1; i < len(test.from); i++ {
@@ -429,6 +429,9 @@ func runDecodeEventTest(t *testing.T, v Version, tests []testDecodeEvent) {
 				neg(t, from)
 			})
 		}
+		t.Run(`Empty`, func(t *testing.T) {
+			neg(t, nil)
+		})
 	})
 }
 

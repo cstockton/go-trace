@@ -172,11 +172,11 @@ Example:
 
 FutileWakeup
 
-	# Strip a path or security sensitive stack info from String events
-	cat test.trace | tracegrep -s '/my/private/homedir' > filtered.trace
+  # Strip a path or security sensitive stack info from String events
+  cat test.trace | tracegrep -s '/my/private/homedir' > filtered.trace
 
-	# Filter out unwanted events with -v
-	cat test.trace | tracegrep -vr 'FutileWakeup|HeapAlloc' > filtered.trace
+  # Filter out unwanted events with -v
+  cat test.trace | tracegrep -vr 'FutileWakeup|HeapAlloc' > filtered.trace
 
 Usage:
 

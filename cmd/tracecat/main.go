@@ -157,8 +157,8 @@ var help = `Small utility for example purposes, for more info see:
 
 Example:
 
-	# Generate a trace file to test with
-	tracecat -g > test.trace
+  # Generate a trace file to test with
+  tracecat -g > test.trace
 
   # If no trace files given, read stdin
   cat test.trace | tracecat

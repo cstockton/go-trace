@@ -150,7 +150,7 @@ func (e *Event) Stack() (Stack, error) {
 func (e *Event) String() string {
 	switch e.typ {
 	case EvString:
-		return fmt.Sprintf(`encoding.%v(%q)`, schemas[e.typ%EvCount].name, e.data)
+		return fmt.Sprintf(`encoding.%v(%q)`, schemas[e.typ%EvCount].name, string(e.data))
 	case EvStack:
 		stk, _ := e.Stack()
 		return stk.String()
