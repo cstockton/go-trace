@@ -1,7 +1,6 @@
 # Go Package: trace
 
   [![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](http://godoc.org/github.com/cstockton/go-trace)
-  [![Go Report Card](https://goreportcard.com/badge/github.com/cstockton/go-trace?style=flat-square)](https://goreportcard.com/report/github.com/cstockton/go-trace)
   [![Coverage Status](https://img.shields.io/codecov/c/github/cstockton/go-trace/master.svg?style=flat-square)](https://codecov.io/github/cstockton/go-trace?branch=master)
   [![Build Status](http://img.shields.io/travis/cstockton/go-trace.svg?style=flat-square)](https://travis-ci.org/cstockton/go-trace)
   [![License](http://img.shields.io/badge/license-mit-blue.svg?style=flat-square)](https://raw.githubusercontent.com/cstockton/go-trace/master/LICENSE)
