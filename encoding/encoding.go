@@ -18,7 +18,8 @@
 // reading the design doc at https://golang.org/s/go11sched as well. It's a bit
 // dated but remains conceptually accurate and serves as a good primer. After
 // that https://github.com/golang/go/wiki/DesignDocuments for GC, preemption,
-// syscalls and everything else.
+// syscalls and everything else. Recently I also came accross runtime/HACKING.md
+// in Go master which provides some good material as well.
 //
 // Compatibility
 //
