@@ -6,6 +6,8 @@ import (
 	"io/ioutil"
 	"math"
 	"testing"
+
+	"github.com/cstockton/go-trace/event"
 )
 
 func TestNewEncoder(t *testing.T) {
@@ -21,7 +23,7 @@ func TestNewEncoder(t *testing.T) {
 	if enc.encode == nil {
 		t.Fatal(`encode func should be non-nil after init()`)
 	}
-	if err := enc.Emit(&Event{typ: EvBatch, args: []uint64{0, 0}}); err != nil {
+	if err := enc.Emit(&event.Event{Type: event.EvBatch, Args: []uint64{0, 0}}); err != nil {
 		t.Fatalf(`Emit for valid event should have nil err; got %v`, err)
 	}
 
@@ -40,13 +42,13 @@ func TestNewEncoder(t *testing.T) {
 
 func TestEncoderErrors(t *testing.T) {
 	enc := NewEncoder(ioutil.Discard)
-	sentinel := enc.Emit(&Event{typ: EvBatch, args: []uint64{}})
+	sentinel := enc.Emit(&event.Event{Type: event.EvBatch, Args: []uint64{}})
 	for i := 0; i < 10; i++ {
 		if err := enc.Err(); err != sentinel {
 			t.Fatal(`exp non-nil identical err for all future calls`)
 		}
 
-		sentinel2 := enc.Emit(&Event{typ: EvFrequency})
+		sentinel2 := enc.Emit(&event.Event{Type: event.EvFrequency})
 		if sentinel2 != sentinel {
 			t.Fatal(`exp err to remain unchanged`)
 		}
@@ -62,7 +64,7 @@ func TestEncoderErrors(t *testing.T) {
 }
 
 func TestEncodeInit(t *testing.T) {
-	fn, err := encodeInit(&offsetWriter{w: ioutil.Discard}, Latest)
+	fn, err := encodeInit(&offsetWriter{w: ioutil.Discard}, event.Latest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func TestEncodeInit(t *testing.T) {
 	}
 	t.Run(`Propagation`, func(t *testing.T) {
 		rwl := &rwLimiter{w: ioutil.Discard, n: 0}
-		fn, err := encodeInit(&offsetWriter{w: rwl}, Latest)
+		fn, err := encodeInit(&offsetWriter{w: rwl}, event.Latest)
 		if err == nil {
 			t.Fatal(`exp non-nil err for writer error`)
 		}
@@ -82,12 +84,12 @@ func TestEncodeInit(t *testing.T) {
 }
 
 func TestEncodeHeader(t *testing.T) {
-	err := encodeHeader(ioutil.Discard, Latest)
+	err := encodeHeader(ioutil.Discard, event.Latest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Run(`Propagation`, func(t *testing.T) {
-		for _, v := range []Version{Version1, Version2, Version3, 0} {
+		for _, v := range []event.Version{event.Version1, event.Version2, event.Version3, 0} {
 			w := &rwLimiter{w: ioutil.Discard, n: 0}
 			if err := encodeHeader(w, v); err == nil {
 				t.Fatal(`exp non-nil err for writer error`)
@@ -96,7 +98,7 @@ func TestEncodeHeader(t *testing.T) {
 	})
 }
 
-func testEncodeFn(t *testing.T, fn encodeFn, evt *Event) {
+func testEncodeFn(t *testing.T, fn encodeFn, evt *event.Event) {
 	sentinel := errors.New(`expected error`)
 	wrt := func(limit int, err error) writer {
 		rwl := &rwLimiter{w: ioutil.Discard, n: limit, err: err}
@@ -113,7 +115,7 @@ func testEncodeFn(t *testing.T, fn encodeFn, evt *Event) {
 		chk(&errn, fn(wrt(i, sentinel), evt))
 		chk(&errn, fn(wrt(i, nil), evt))
 	}
-	chk(&errn, fn(wrt(32, nil), &Event{}))
+	chk(&errn, fn(wrt(32, nil), &event.Event{}))
 
 	if errn == 0 {
 		t.Fatal(`expected at least 1 failure`)
@@ -123,15 +125,15 @@ func testEncodeFn(t *testing.T, fn encodeFn, evt *Event) {
 func TestEncoderResilience(t *testing.T) {
 	max, b := uint64(math.MaxUint64), makeNonZeroBuf(16)
 	args := []uint64{max, max, max, max, max}
-	run := func(fn encodeFn, evt *Event) {
+	run := func(fn encodeFn, evt *event.Event) {
 		testEncodeFn(t, fn, evt)          // test the given fn
 		testEncodeFn(t, encodeEvent, evt) // run through the top level encodeFn too
 	}
-	run(encodeEventArgs, &Event{typ: EvStack, args: args})
-	run(encodeEventInline, &Event{
-		typ: EvBatch, args: []uint64{max, max}})
-	run(encodeEventString, &Event{
-		typ: EvString, args: []uint64{max}, data: b})
+	run(encodeEventArgs, &event.Event{Type: event.EvStack, Args: args})
+	run(encodeEventInline, &event.Event{
+		Type: event.EvBatch, Args: []uint64{max, max}})
+	run(encodeEventString, &event.Event{
+		Type: event.EvString, Args: []uint64{max}, Data: b})
 }
 
 func TestOffsetWriter(t *testing.T) {

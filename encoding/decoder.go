@@ -6,38 +6,44 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/cstockton/go-trace/event"
+)
+
+const (
+
+	// Guards against a bad trace file or decoder bug from causing oom
+	maxMakeSize = 1e6
+
+	// Shift of the number of arguments in the first event byte.
+	//
+	//   src/runtime/trace.go:85~ traceArgCountShift = 6
+	traceArgCountShift = 6
 )
 
 // Decoder reads events encoded in the Go trace format from an input stream.
 type Decoder struct {
-	err    error
-	buf    *offsetReader
-	state  *state
-	decode func(reader, *state) (*Event, error)
+	state *state
+	err   error
 }
 
 // NewDecoder returns a new decoder that reads from r. If the given r is a
 // bufio.Reader then the decoder will use it for buffering, otherwise creating
 // a new bufio.Reader.
 func NewDecoder(r io.Reader) *Decoder {
-	buf, ok := r.(*bufio.Reader)
-	if !ok {
-		buf = bufio.NewReader(r)
-	}
-	return &Decoder{buf: &offsetReader{Reader: buf}}
+	return &Decoder{state: newState(r)}
 }
 
 // Reset the Decoder to read from r, if r is a bufio.Reader it will use it for
 // buffering, otherwise resetting the existing bufio.Reader which may have been
 // obtained from the caller of NewDecoder.
 func (d *Decoder) Reset(r io.Reader) {
-	buf, ok := r.(*bufio.Reader)
-	if ok {
-		d.buf.Reader = buf
-	} else {
-		d.buf.Reset(r)
+	if r == nil {
+		d.err = errors.New(`nil io.Reader given to Reset`)
+		return
 	}
-	d.err, d.state, d.decode, d.buf.off = nil, nil, nil, 0
+	d.err = nil
+	d.state.Reset(r)
 }
 
 // Err returns the first error that occurred during decoding, if that error was
@@ -50,17 +56,16 @@ func (d *Decoder) Err() error {
 }
 
 // Version retrieves the version information contained in the encoded trace. You
-// do not need to call this function directly to begin retrieving events, it is
-// done on the first call to Event if it was not called prior. Only the first
-// call to Version results in I/O to the underlying reader.
-func (d *Decoder) Version() (Version, error) {
+// do not need to call this function directly to begin retrieving events. No I/O
+// occurs unless no prior calls to Decode() have been made.
+func (d *Decoder) Version() (event.Version, error) {
+	if d.state.ver == 0 {
+		d.init()
+	}
 	if d.err != nil {
 		return 0, d.err
 	}
-	if d.decode == nil {
-		d.init()
-	}
-	return d.state.ver, nil
+	return d.state.ver, d.err
 }
 
 // More returns true when events may still be retrieved, false otherwise. The
@@ -70,369 +75,200 @@ func (d *Decoder) More() bool {
 	if d.err != nil {
 		return false
 	}
-	if d.buf.Buffered() == 0 {
-		_, d.err = d.buf.Peek(1)
+	if d.state.Buffered() == 0 {
+		if _, err := d.state.Peek(1); err != nil {
+			d.halt(err)
+			return false
+		}
 	}
-	return d.err == nil
+	return true
 }
 
-// Decode returns the next trace event from the input stream. If Decode returns
-// a non-nil error then *Event will be nil. Any error returned indicates
-// permanent failure and all future calls will return the same error until
-// Reset. If the error is a io.EOF value then the Decoding was a success if at
-// least one event has been read, otherwise io.ErrUnexpectedEOF is returned.
-func (d *Decoder) Decode() (*Event, error) {
-	if d.decode == nil {
+// Decode the next event from the input stream into the given *event.Event.
+//
+// The evt argument must be non-nil or permanent failure occurs. Callers must
+// call evt.Reset() if reusing *event.Event to prevent prior fields persisting.
+//
+// Allocating a zero-value event.Event is sufficient as the decoder will create
+// the Args and Data slices on demand. For performance it will use the same
+// slice backings if they already have sufficient capacity. This allows zero
+// allocation decoding by reusing an event, object, i.e.:
+//
+//    // The below allocations are generous, Args contains an average of 3-6 vals
+//    // with an exception of Stack traces being depth * Frames. Data simply holds
+//    // strings like file paths and func names.
+//    evt := &event.Event{Args: make(512), Data: make(4096)}
+//    for { dec.Decode(evt); ... }
+//
+// Once a error is returned all future calls will return the same error until
+// Reset is called. If the error is a io.EOF value then the Decoding was a
+// success if at least one event has been read, otherwise io.ErrUnexpectedEOF is
+// returned.
+func (d *Decoder) Decode(evt *event.Event) error {
+	if evt == nil {
+		// We can't do anything useful, fail permanently.
+		d.err = errors.New(`nil event.Event given to Decode`)
+		return d.err
+	}
+	if d.state.ver == 0 {
 		d.init()
 	}
 	if d.err != nil {
 		// Once an error occurs the decoder may no longer be used.
-		return nil, d.err
+		return d.err
 	}
-
-	// decode a new event.
-	evt, err := d.decode(d.buf, d.state)
-	if err != nil {
-
-		// If we have an io.EOF before we received a event return UnexpectedEOF.
-		if err == io.EOF && d.state.count == 0 {
-			err = io.ErrUnexpectedEOF
-		}
-		d.err = err
-		return nil, err
+	if err := decodeEvent(d.state, evt); err != nil {
+		return d.halt(err)
 	}
-
-	return evt, nil
+	d.state.count++
+	return nil
 }
 
-// init will initialize the Decoder so it may begin receiving events by decoding
-// the trace header within the first 16 bytes of r.
+// halt is called anytime an error occurs, if err was io.EOF before we received
+// a complete event it will set the error state to UnexpectedEOF isntead.
+func (d *Decoder) halt(err error) error {
+	if err == io.EOF && d.state.count == 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	d.err = err
+	return d.err
+}
+
 func (d *Decoder) init() {
-	if d.err != nil {
+	if err := decodeHeader(d.state); err != nil {
+		d.halt(err)
 		return
 	}
-	if d.decode != nil {
-		d.err = errors.New(`possible unsafe usage from multiple goroutines`)
-		return
+
+	// Set the argoffset for v1 only since the latest versions have no offset.
+	if d.state.ver == event.Version1 {
+		d.state.argoff = 1
 	}
-	d.decode, d.state, d.err = decodeInit(d.buf)
 }
 
-type reader interface {
-	io.Reader
-	io.ByteReader
-	Off() int
-}
-
-type offsetReader struct {
+type state struct {
 	*bufio.Reader
-	off int
+	ver        event.Version
+	off, count int
+	argoff     int
 }
 
-func (r *offsetReader) Off() int {
-	return r.off
+func newState(r io.Reader) *state {
+	return &state{Reader: bufio.NewReader(r)}
 }
 
-func (r *offsetReader) Read(p []byte) (n int, err error) {
-	n, err = r.Reader.Read(p)
-	r.off += n
+func (s *state) Reset(r io.Reader) {
+	buf := s.Reader
+	if buf == nil {
+		buf = bufio.NewReader(r)
+	} else {
+		buf.Reset(r)
+	}
+	*s = state{Reader: buf}
+}
+
+func (s *state) Read(p []byte) (n int, err error) {
+	n, err = s.Reader.Read(p)
+	s.off += n
 	return
 }
 
-func (r *offsetReader) ReadByte() (b byte, err error) {
-	b, err = r.Reader.ReadByte()
-	r.off++
-	return
-}
-
-// decodeFn is a function that knows how to decode events for a specific version
-// of the Go trace format. They all return the latest versions Event structure,
-// making a best effort to deal with any cross version discrepancies.
-type decodeFn func(r reader, s *state) (*Event, error)
-
-// decodeInit will read the header and initialize the associated codec.
-func decodeInit(r io.Reader) (decodeFn, *state, error) {
-	ver, err := decodeHeader(r)
-	if err != nil {
-		return decodeEventVersionErr, nil, err
-	}
-
-	// We have a valid version, we initialize with it and will be ready to receive
-	// events.
-	return decodeInitVersion(ver)
-}
-
-// decodeInit will read the header and initialize the associated codec.
-func decodeInitVersion(v Version) (fn decodeFn, s *state, err error) {
-	s = newState()
-	s.ver = v
-
-	switch s.ver {
-	case Version1:
-		s.argOffset, s.frameSize = 1, 1
-		fn = decodeEventVersion1
-	case Version2:
-		fn = decodeEventVersion2
-	case Version3:
-		fn = decodeEventVersion3
-	default:
-		fn = decodeEventVersionErr
-		err = ErrVersion
-	}
+func (s *state) ReadByte() (b byte, err error) {
+	b, err = s.Reader.ReadByte()
+	s.off++
 	return
 }
 
 var headerLut = [9]byte{'t', 'r', 'a', 'c', 'e', 0, 0, 0, 0}
 
-// decodeHeader will read a valid trace header consisting of exactly 16 bytes from
-// r, returning the version on success and an error on failure.
-func decodeHeader(r io.Reader) (Version, error) {
+// decodeHeader will read a valid trace header consisting of exactly 16 bytes
+// from r, updating state or returning an error on failure.
+func decodeHeader(s *state) error {
 	var b [16]byte
-	if _, err := io.ReadFull(r, b[:]); err != nil {
+	if _, err := io.ReadFull(s, b[:]); err != nil {
 		if err == io.EOF {
-			return 0, io.ErrUnexpectedEOF
+			return io.ErrUnexpectedEOF
 		}
-		return 0, err
+		return err
 	}
 
 	// "go 1.8 trace\x00\x00\x00\x00"
 	//  +++|-----------------------
 	if b[0] != 'g' || b[1] != 'o' || b[2] != ' ' {
-		return 0, errors.New(`trace header prefix was malformed`)
+		return errors.New(`trace header prefix was malformed`)
 	}
 
 	// Small lookahead here for more intuitive error reporting.
 	// "go 1.8 trace\x00\x00\x00\x00"
 	//  xxx++-+|-----------------------
 	if b[3] != '1' || b[4] != '.' || b[6] != ' ' {
-		return 0, ErrVersion
+		return errors.New(`trace header version was malformed`)
 	}
 
 	// "go 1.8 trace\x00\x00\x00\x00"
 	//  xxxxx+x|----------------------
-	var ver Version
 	switch b[5] {
 	case '5':
-		ver = Version1
+		s.ver = event.Version1
 	case '7':
-		ver = Version2
+		s.ver = event.Version2
 	case '8':
-		ver = Version3
+		s.ver = event.Version3
+	case '9':
+		s.ver = event.Version4
 	default:
-		return 0, ErrVersion
+		return errors.New(`trace header version was malformed`)
 	}
 
 	// "go 1.8 trace\x00\x00\x00\x00"
 	//  xxxxxx++++++++++++++++++++++|
 	if !bytes.Equal(headerLut[:], b[7:]) {
-		return 0, errors.New(`trace header suffix was malformed`)
+		s.ver = 0
+		return errors.New(`trace header suffix was malformed`)
 	}
-	return ver, nil
+	return nil
 }
 
-// decodeEventVersionErr will simply return ErrVersion.
-func decodeEventVersionErr(reader, *state) (*Event, error) {
-	return nil, ErrVersion
-}
+// decodeEvent is the top level entry function for decoding events. It will
+// decode from the given state into evt, returning an err on failure.
+func decodeEvent(s *state, evt *event.Event) error {
 
-// decodeEventVersion1 will decode a v1 trace event. The primary difference from
-// future versions is that it will always have 2 leading args, sequence and the
-// tick diff. See:
-//
-// runtime/trace.go:512:
-//
-//   if narg == 3 {
-// 	   // Reserve the byte for length assuming that length < 128.
-// 	   buf.varint(0)
-// 	   lenp = &buf.arr[buf.pos-1]
-//   }
-//   buf.varint(seqDiff)
-//   buf.varint(tickDiff)
-//   for _, a := range args {
-// 	   buf.varint(a)
-//   }
-//
-func decodeEventVersion1(r reader, s *state) (*Event, error) {
-	e, err := decodeEvent(r, s)
+	// Retrieve and validate the event type.
+	args, err := decodeEventType(s, evt)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if evt.Type.Since() > s.ver {
+		return fmt.Errorf(`version %v does not support event %v`, s.ver, evt.Type)
 	}
 
-	// @TODO compute ts args from seq + tick diff
-	var ts uint64
-	// if s.lastTs != 0 {}
+	// Set the event offset, accomodating the Type we just read.
+	evt.Off = s.off - 1
 
-	a := e.args
-	switch e.typ {
-
-	// EvGoSysExit is skipped for now, because:
-	//
-	//   The constant declaration in Go 1.5.4 says:
-	//     [timestamp, goroutine id, real timestamp]
-	//
-	//   But it appears the function emits a sequence as well:
-	//     traceEvent(traceEvGoSysExit, -1, uint64(getg().m.curg.goid), seq, uint64(ts)/traceTickDiv)
-	//
-	//   Which aligns it with latest events signature:
-	//     [timestamp, goroutine id, seq, real timestamp]
-	//
-	// case EvGoSysExit:
-	//   break
-
-	case EvStack:
-		// Stack events don't need modified
-
-	case EvBatch:
-		// Had an unused arg in middle of event.
-		//
-		// 1.5
-		//   buf.byte(traceEvBatch | 1<<traceArgCountShift)
-		//   buf.varint(uint64(pid))
-		//   buf.varint(seq)
-		//   buf.varint(ticks)
-		//
-		// 1.8
-		//   buf.byte(traceEvBatch | 1<<traceArgCountShift)
-		//   buf.varint(uint64(pid))
-		//   buf.varint(ticks)
-		e.args[0], e.args[2] = a[0], a[2]
-
-	case EvFrequency, EvTimerGoroutine:
-		// Had trailing nul bytes, i.e.:
-		//
-		// 1.5:
-		//   data = append(data, traceEvFrequency|0<<traceArgCountShift)
-		//   data = traceAppend(data, uint64(freq))
-		//   data = traceAppend(data, 0)
-		//
-		// 1.8:
-		//   data = append(data, traceEvFrequency|0<<traceArgCountShift)
-		//   data = traceAppend(data, uint64(freq))
-		e.args = e.args[:1]
-
-	case EvGCStart:
-		// 1.5: [timestamp, stack id]
-		// 1.8: [timestamp, seq, stack id]
-		e.args[0], e.args[1], e.args[2] = ts, 0, a[2]
-
-	case EvGoStart:
-		// 1.5: [timestamp, goroutine id]
-		// 1.8: [timestamp, goroutine id, seq]
-		e.args[0], e.args[1], e.args[2] = ts, a[2], 0
-
-	case EvGoUnblock:
-		// 1.5: [timestamp, goroutine id, stack]
-		//   traceEvent(traceEvGoUnblock, skip, uint64(gp.goid))
-		// 1.8: [timestamp, goroutine id, seq, stack]
-		e.args[0], e.args[1], e.args[2], e.args[3] = ts, a[2], 0, a[3]
-
-	default:
-		// All other events are normalized by removing the extraneous arg. I use the
-		// same slice backing to avoid alloc.
-		e.args = e.args[1:]
-		e.args[0] = ts
-	}
-
-	if err := s.visit(e); err != nil {
-		return nil, err
-	}
-	return e, nil
+	// Decode the event data.
+	return decodeEventData(s, evt, args)
 }
 
-// decodeEventVersion2 will decode a v2 trace event, in v2 the arguments no
-// longer always included a seq, meaning you do not have to increment for an
-// additional argument. See:
-//
-// go1.7/runtime/trace.go:505:
-//
-//   if narg == 3 {
-// 	   // Reserve the byte for length assuming that length < 128.
-// 	   buf.varint(0)
-// 	   lenp = &buf.arr[buf.pos-1]
-//   }
-//   buf.varint(tickDiff)
-//   for _, a := range args {
-// 	   buf.varint(a)
-//   }
-func decodeEventVersion2(r reader, s *state) (evt *Event, err error) {
-	if evt, err = decodeEvent(r, s); err != nil {
-		return nil, err
-	}
-
-	if err := s.visit(evt); err != nil {
-		return nil, err
-	}
-	return evt, nil
-}
-
-// decodeEventVersion3 will decode a v3 trace event. There is no structural
-// changes in v3, just new events.
-func decodeEventVersion3(r reader, s *state) (evt *Event, err error) {
-	if evt, err = decodeEvent(r, s); err != nil {
-		return nil, err
-	}
-
-	if err := s.visit(evt); err != nil {
-		return nil, err
-	}
-	return evt, nil
-}
-
-// These are the general codec unaware funcs.
-//
-// decodeEvent ->
-//   decodeEventType ->
-//   decodeEventArgs ->
-//     (Type == EvString) ->
-//       decodeArgsN(1) ->
-//         decodeUleb
-//       decodeData
-//         io.ReadFull
-//     (args < 4) ->
-//       decodeArgsN(arg count) ->
-//         decodeUleb
-//       decodeArgs
-//         decodeUleb ...
-//
-
-// decodeEvent will decode a valid event from a given reader and state, or
-// return an err on failure. It will read the arguments using the state
-// argOffset, which represents the current versions minimum inline arguments
-// minus the target versions. This allows version 1 which always had two
-// argument (see decodeEventType) to be shared accross versions.
-func decodeEvent(r reader, s *state) (*Event, error) {
-	// Get the number of args count and type from the first byte.
-	typ, args, err := decodeEventType(r)
-	if err != nil {
-		return nil, err
-	}
-
-	// Quick lint check for this event.
-	if typ.Since() > s.ver {
-		return nil, fmt.Errorf(`version %v does not support event %v`, s.ver, typ)
-	}
-
-	// Create the event and decode the arguments. The -1 here accomodates for the
-	// single byte read in decodingEventType.
-	evt := &Event{typ: typ, off: r.Off() - 1, state: s}
+// decodeEventData will decode event data from valid state into evt, returning
+// an err on failure. It will read the arguments using the state argOffset
+// which represents the current versions minimum inline arguments minus the
+// target versions. This allows version 1 which always had two argument
+// (see decodeEventType) to be shared accross versions.
+func decodeEventData(s *state, evt *event.Event, args int) error {
 	switch {
-	case evt.typ == EvString:
-		// Strings are a special case, they contain a string arg but also a payload
-		// for the variable argument length. We grab the string id then fall through
-		// to decode the string value.
-		if evt.args, err = decodeEventInline(r, 1); err == nil {
-			evt.data, err = decodeEventData(r)
+	case evt.Type == event.EvString:
+		// Strings are a special case, they contain a single StringID argument and
+		// the remainder is the raw utf8 encoded bytes.
+		if err := decodeEventInline(s, 1, evt); err != nil {
+			return err
 		}
+		return decodeEventString(s, evt)
 	case args < 4:
 		// Arguments are inline if they do not exceed this boundary.
-		evt.args, err = decodeEventInline(r, args+s.argOffset)
+		return decodeEventInline(s, args+s.argoff, evt)
 	default:
-		evt.args, err = decodeEventArgs(r, s)
+		return decodeEventArgs(s, evt)
 	}
-	if err != nil {
-		return nil, err
-	}
-	return evt, nil
 }
 
 // decodeEventType will determine the event type from the first 6 bits and the
@@ -466,79 +302,88 @@ func decodeEvent(r reader, s *state) (*Event, error) {
 // Strings are a special case that have less than 3 args (one a string id) but
 // do not encode an arg count within the type. They specify a additional payload
 // length that is the utf8 encoded string.
-func decodeEventType(r io.ByteReader) (Type, int, error) {
-	byt, err := r.ReadByte()
+func decodeEventType(s *state, evt *event.Event) (int, error) {
+	byt, err := s.ReadByte()
 	if err != nil {
-		return EvNone, 0, err
+		return 0, err
 	}
 
 	// see func comment for +1
-	typ, args := Type(byt<<2>>2), int(byt>>traceArgCountShift)+1
-	if !typ.Valid() {
-		return EvNone, 0, fmt.Errorf("invalid event type 0x%x", byte(typ))
+	var args int
+	evt.Type, args = event.Type(byt<<2>>2), int(byt>>traceArgCountShift)+1
+	if !evt.Type.Valid() {
+		return 0, fmt.Errorf("invalid event type 0x%x", byte(evt.Type))
 	}
-	return typ, args, nil
+	return args, nil
 }
 
-// decodeEventData will decode the message payload as a byte slice instead of uint64
+// decodeEventString will decode the message payload as a byte slice instead of uint64
 // arguments.
-func decodeEventData(r reader) ([]byte, error) {
+func decodeEventString(s *state, evt *event.Event) error {
 	// This first arg represents the byte length of the message.
-	size, err := decodeUleb(r)
+	size, err := decodeUleb(s)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if maxMakeSize < size {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"size %v exceeds allocation limit(%v)", size, maxMakeSize)
 	}
-
-	data := make([]byte, size)
-	if _, err = io.ReadFull(r, data); err != nil {
-		return nil, err
+	if int(size) > cap(evt.Data) {
+		evt.Data = make([]byte, size)
+	} else {
+		evt.Data = evt.Data[0:size]
 	}
-	return data, nil
+
+	if _, err = io.ReadFull(s, evt.Data); err != nil {
+		return err
+	}
+	return nil
 }
 
 // decodeEventArgs is used when the args packed in the event byte exceed the
 // available bits, instead specifying to decode uleb values until exceeding the
 // given message length received from the first uleb value.
-func decodeEventArgs(r reader, s *state) (args []uint64, err error) {
-	var v uint64
-	if v, err = decodeUleb(r); err != nil {
-		return
+func decodeEventArgs(s *state, evt *event.Event) error {
+	v, err := decodeUleb(s)
+	if err != nil {
+		return err
 	}
 	if maxMakeSize < v {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"argument count %v exceeds allocation limit(%v)", v, maxMakeSize)
 	}
 
-	until := r.Off() + int(v)
-	for r.Off() < until {
-		if v, err = decodeUleb(r); err != nil {
-			return nil, err
+	until := s.off + int(v)
+	for s.off < until {
+		if v, err = decodeUleb(s); err != nil {
+			return err
 		}
-		args = append(args, v)
+		evt.Args = append(evt.Args, v)
 	}
-	return
+	return nil
 }
 
 // decodeEventInline is used when the args packed in the event byte fit within
 // the available bits allowing specifying to read exactly n uleb values.
-func decodeEventInline(r io.ByteReader, n int) ([]uint64, error) {
+func decodeEventInline(r io.ByteReader, n int, evt *event.Event) error {
 	if maxMakeSize < n {
-		return nil, fmt.Errorf(
-			"size %v exceeds allocation limit(%v)", n, maxMakeSize)
+		return fmt.Errorf("size %v exceeds allocation limit(%v)", n, maxMakeSize)
 	}
-	args := make([]uint64, n)
+	if n > cap(evt.Args) {
+		evt.Args = make([]uint64, n)
+	} else {
+		evt.Args = evt.Args[0:n]
+	}
 
-	var err error
 	for i := 0; i < n; i++ {
-		if args[i], err = decodeUleb(r); err != nil {
-			return nil, err
+		v, err := decodeUleb(r)
+		if err != nil {
+			return err
 		}
+		evt.Args[i] = v
 	}
-	return args, nil
+	return nil
 }
 
 // decodeUleb will read one Unsigned Little Endian base128 encoded value from r.

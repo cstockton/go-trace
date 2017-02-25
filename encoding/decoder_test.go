@@ -1,18 +1,62 @@
 package encoding
 
 import (
-	"bufio"
 	"bytes"
+	"errors"
+	"flag"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cstockton/go-trace/event"
 )
+
+var runLongTests = flag.Bool("long", false, ``)
+
+func TestAllocs(t *testing.T) {
+	if `` != testing.CoverMode() {
+		t.Skip(`skipping testing during cover mode`)
+	}
+	if !*runLongTests {
+		t.Skip(`skipping allocs test without -long`)
+	}
+
+	t.Run(`Reset`, func(t *testing.T) {
+		exp := 10
+		evt := new(event.Event)
+		fn := func(count int) {
+			for i := 0; i < count; i++ {
+				evt.Args = append(evt.Args, uint64(i))
+				evt.Data = append(evt.Data, byte(i))
+			}
+		}
+		fn(exp)
+
+		res := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				evt.Reset()
+				fn(exp)
+				if got := len(evt.Args); got != exp {
+					b.Fatalf(`exp Args len %v; got %v`, exp, got)
+				}
+				if got := len(evt.Data); got != exp {
+					b.Fatalf(`exp Data len %v; got %v`, exp, got)
+				}
+			}
+		})
+		if got := res.MemBytes; got > 0 {
+			t.Fatalf(`exp 0 bytes; got %v`, got)
+		}
+	})
+}
 
 func TestDecoder(t *testing.T) {
 	t.Run(`Decode`, func(t *testing.T) {
 		runDecoderTest(t, func(dec *Decoder) {
-			evt, err := dec.Decode()
+			evt := new(event.Event)
+			err := dec.Decode(evt)
 			if err != nil {
 				t.Fatalf(`exp nil err; got %v`, err)
 			}
@@ -27,34 +71,71 @@ func TestDecoder(t *testing.T) {
 			if err != nil {
 				t.Fatalf(`exp nil err; got %v`, err)
 			}
-			if ver != Latest {
-				t.Fatal(`decoded version should be Latest`)
+			if ver != event.Latest {
+				t.Fatal(`decoded version should be event.Latest`)
 			}
 		})
 	})
+	t.Run(`Reset`, func(t *testing.T) {
+		dec := NewDecoder(new(bytes.Buffer))
+		if dec.Reset(nil); dec.err == nil {
+			t.Error(`exp non-nil err`)
+		}
+	})
+	t.Run(`NilEvent`, func(t *testing.T) {
+		dec := NewDecoder(new(bytes.Buffer))
+		err := dec.Decode(nil)
+		if err == nil {
+			t.Error(`exp non-nil err`)
+		}
+	})
 	t.Run(`UnexpectedEOF`, func(t *testing.T) {
 		dec := NewDecoder(new(bytes.Buffer))
-		evt, sentinel := dec.Decode()
+		evt := new(event.Event)
+		sentinel := dec.Decode(evt)
 		if sentinel != io.ErrUnexpectedEOF {
-			t.Fatal(`exp io.ErrUnexpectedEOF sentinel err`)
+			t.Fatalf(`exp io.ErrUnexpectedEOF sentinel err, got: %v`, sentinel)
 		}
-		if evt != nil {
-			t.Fatalf(`decoded event should be nil; got %v`, evt)
+		if evt.Type != event.EvNone {
+			t.Fatalf(`decoded event type should be EvNone; got %v`, evt)
 		}
-		checkDecoder(t, dec, sentinel)
 
 		// cause next decode to yield unexpected iof during Decode()
-		buf := makeTrace(t, Latest, 1)
+		buf := makeBuffer(t, event.Latest, 1)
 		dec.Reset(bytes.NewReader(buf.Bytes()[:buf.Len()-2]))
-		evt, sentinel = dec.Decode()
+		checkDecoderInit(t, dec)
+
+		sentinel = dec.Decode(evt)
 		if sentinel != io.ErrUnexpectedEOF {
-			t.Fatal(`exp io.ErrUnexpectedEOF sentinel err`)
+			t.Fatalf(`exp io.ErrUnexpectedEOF sentinel err, got: %v`, sentinel)
 		}
-		if evt != nil {
-			t.Fatalf(`decoded event should be nil; got %v`, evt)
-		}
-		checkDecoder(t, dec, sentinel)
 	})
+}
+
+func TestState(t *testing.T) {
+	t.Run(`Reset`, func(t *testing.T) {
+		// nil state Reader should get a new Reader
+		s := new(state)
+		s.Reset(new(bytes.Buffer))
+		if s.Reader == nil {
+			t.Fatal(`expected non-nil *bufio.Reader`)
+		}
+	})
+}
+
+func testDecodeSetup(t *testing.T, v event.Version, b []byte) *state {
+	buf := new(bytes.Buffer)
+	buf.Write(makeHeader(t, v))
+	if b == nil {
+		b = makeEvents(t, v, 1)
+	}
+	buf.Write(b)
+	dec := NewDecoder(buf)
+	dec.init()
+	if dec.err != nil {
+		t.Fatal(dec.err)
+	}
+	return dec.state
 }
 
 func checkDecoder(t *testing.T, dec *Decoder, exp error) {
@@ -78,14 +159,15 @@ func checkDecoder(t *testing.T, dec *Decoder, exp error) {
 			t.Fatal(`exp non-nil identical err for all future calls`)
 		}
 
-		evt, err := dec.Decode()
+		evt := new(event.Event)
+		err := dec.Decode(evt)
 		if err != exp {
 			t.Fatal(`exp err to remain unchanged`)
 		}
-		if evt != nil {
-			t.Fatalf(`decoded event should be nil; got %v`, evt)
+		if evt.Type != event.EvNone {
+			t.Fatalf(`decoded event type should be EvNone; got %v`, evt)
 		}
-		if dec.More() != false {
+		if dec.More() {
 			t.Fatal(`more should return false while d.err is non nil`)
 		}
 	}
@@ -95,197 +177,157 @@ func checkDecoderInit(t *testing.T, dec *Decoder) {
 	if dec == nil {
 		t.Fatal(`exp non-nil decoder`)
 	}
-	if dec.decode == nil {
-		t.Fatal(`decode func should be non-nil after init()`)
-	}
 	if dec.state == nil {
-		t.Fatal(`decode state should be non-nil after init()`)
+		t.Fatal(`initial decode state should be non-nil`)
 	}
-	if off := dec.buf.Off(); off == 0 {
-		t.Fatalf(`writer offset should clear after Reset, but got: %v`, off)
+	if dec.state.argoff != 0 {
+		t.Fatal(`initial decode state argOffset should be 0`)
 	}
-}
-
-func checkDecoderReset(t *testing.T, dec *Decoder) {
-	if dec.decode != nil {
-		t.Fatal(`decode func should be nil before init()`)
+	if dec.state.count != 0 {
+		t.Fatal(`initial decode state count should be 0`)
 	}
-	if dec.state != nil {
-		t.Fatal(`decode state should be nil before init()`)
-	}
-	if off := dec.buf.Off(); off != 0 {
-		t.Fatalf(`writer offset should clear after Reset, but got: %v`, off)
+	if off := dec.state.off; off != 0 {
+		t.Fatalf(`initial writer offset should clear, but got: %v`, off)
 	}
 }
 
 func runDecoderTest(t *testing.T, fn func(dec *Decoder)) {
-	dec := NewDecoder(makeTrace(t, Latest, 1))
-	checkDecoderReset(t, dec)
+	r := makeBuffer(t, event.Latest, 1)
+	dec := NewDecoder(r)
+	checkDecoderInit(t, dec)
 
 	fn(dec)
 	checkDecoder(t, dec, nil)
-	checkDecoderInit(t, dec)
 
-	dec.init()
-	sentinel := dec.Err()
-	if sentinel == nil {
-		t.Fatal(`exp error for multiple init calls`)
-	}
+	// check error propagation with sentinel err
+	sentinel := errors.New(`sentinel`)
+	dec.halt(sentinel)
 	checkDecoder(t, dec, sentinel)
-	checkDecoderInit(t, dec)
 
 	_, err := dec.Version()
 	if err != sentinel {
 		t.Errorf(`exp err %q; got %q`, sentinel, err)
 	}
 
-	_, err = dec.Decode()
+	evt := new(event.Event)
+	err = dec.Decode(evt)
 	if err != sentinel {
 		t.Errorf(`exp err %q; got %q`, sentinel, err)
 	}
 
 	// all future calls should be same error
-	dec.init()
+	if _, err2 := dec.Version(); err2 != err {
+		t.Fatalf(`exp err %v; got %v`, err, err2)
+	}
 	if err2 := dec.Err(); err2 != err {
 		t.Fatalf(`exp err %v; got %v`, err, err2)
 	}
 
 	// ensure decoder recovers after reset and reuses same bufio.Reader
-	buf := dec.buf.Reader
-	dec.Reset(makeTrace(t, Latest, 1))
-	if !reflect.DeepEqual(buf, dec.buf.Reader) {
+	buf := dec.state.Reader
+	dec.Reset(makeBuffer(t, event.Latest, 1))
+	if !reflect.DeepEqual(buf, dec.state.Reader) {
 		t.Fatal(`expected decoder to reuse same iobuf.Reader`)
 	}
-	checkDecoderReset(t, dec)
+	checkDecoderInit(t, dec)
 
-	rdr := bufio.NewReader(makeTrace(t, Latest, 1))
-	dec.Reset(rdr)
-	if !reflect.DeepEqual(rdr, dec.buf.Reader) {
+	cur := dec.state.Reader
+	dec.Reset(makeBuffer(t, event.Latest, 1))
+	if cur != dec.state.Reader {
 		t.Fatal(`expected decoder to use given iobuf.Reader`)
 	}
-	checkDecoderReset(t, dec)
+	checkDecoderInit(t, dec)
 
-	dec.Reset(makeTrace(t, Latest, 1))
-	checkDecoderReset(t, dec)
-}
-
-func TestDecodeInitVersion(t *testing.T) {
-	fn, s, err := decodeInitVersion(Latest)
-	if err != nil {
-		t.Error(err)
-	}
-	if s == nil {
-		t.Error(`exp non-nil state`)
-	}
-	if fn == nil {
-		t.Error(`exp non-nil fn`)
-	}
-
-	t.Run(`InvalidVersion`, func(t *testing.T) {
-		fn, s, err := decodeInitVersion(0)
-		if err == nil {
-			t.Error(`exp non-nil error`)
-		}
-		if s == nil {
-			t.Error(`exp non-nil state`)
-		}
-		if fn == nil {
-			t.Error(`exp nil fn`)
-		}
-	})
+	dec.Reset(makeBuffer(t, event.Latest, 1))
+	checkDecoderInit(t, dec)
 }
 
 func TestDecodeErrors(t *testing.T) {
-	negByte := func(t *testing.T, r reader, s *state) {
-		evt, err := decodeEvent(r, s)
+	negMulti := func(t *testing.T, fn func() io.Reader) {
+		evt := new(event.Event)
+		err := decodeEventString(newState(fn()), evt)
 		if err == nil {
 			t.Error(`exp non-nil err`)
-		}
-		if evt != nil {
-			t.Error(`exp nil Event`)
 		}
 
-		typ, argn, err := decodeEventType(r)
+		*evt = event.Event{}
+		err = decodeEventInline(newState(fn()), maxMakeSize+1, evt)
 		if err == nil {
 			t.Error(`exp non-nil err`)
-		}
-		if argn != 0 {
-			t.Error(`exp zero args`)
-		}
-		if typ != EvNone {
-			t.Error(`exp EvNone args`)
-		}
-	}
-	negMulti := func(t *testing.T, s *state, fn func() reader) {
-		data, err := decodeEventData(fn())
-		if err == nil {
-			t.Error(`exp non-nil err`)
-		}
-		if len(data) != 0 {
-			t.Error(`exp zero data`)
 		}
 
-		args, err := decodeEventInline(fn(), maxMakeSize+1)
+		*evt = event.Event{}
+		err = decodeEventArgs(newState(fn()), evt)
 		if err == nil {
 			t.Error(`exp non-nil err`)
-		}
-		if len(args) != 0 {
-			t.Error(`exp zero args`)
-		}
-
-		args, err = decodeEventArgs(fn(), s)
-		if err == nil {
-			t.Error(`exp non-nil err`)
-		}
-		if len(args) != 0 {
-			t.Error(`exp zero args`)
 		}
 	}
 	t.Run(`EOF`, func(t *testing.T) {
 		// EOF Initial position for single & multi-byte
-		r := &offsetReader{Reader: bufio.NewReader(bytes.NewReader(nil))}
-		negByte(t, r, newState())
-		negMulti(t, newState(), func() reader {
-			return r
+		negMulti(t, func() io.Reader {
+			return bytes.NewReader(nil)
 		})
 
 		// EOF After first read
-		negMulti(t, newState(), func() reader {
-			return &offsetReader{Reader: bufio.NewReader(
-				bytes.NewReader([]byte{0x1}))}
+		negMulti(t, func() io.Reader {
+			return bytes.NewReader([]byte{0x1})
 		})
 
 		// EOF After first read + half of second read.
-		negMulti(t, newState(), func() reader {
-			return &offsetReader{Reader: bufio.NewReader(
-				bytes.NewReader([]byte{0x80, 0x2, 0x1, 0x1}))}
+		negMulti(t, func() io.Reader {
+			return bytes.NewReader([]byte{0x80, 0x2, 0x1, 0x1})
 		})
 	})
 	t.Run(`SizeOverflow`, func(t *testing.T) {
 		b := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x1}
-		r := &offsetReader{Reader: bufio.NewReader(bytes.NewReader(b))}
+		s := newState(bytes.NewReader(b))
 
-		data, err := decodeEventData(r)
+		evt := new(event.Event)
+		err := decodeEventString(s, evt)
 		if err == nil {
 			t.Error(`exp non-nil err`)
 		}
 		if !strings.Contains(err.Error(), "allocation limit") {
 			t.Errorf(`exp err for exceeding allocation limit; got %v`, err)
 		}
-		if len(data) != 0 {
+		if len(evt.Data) != 0 {
 			t.Error(`exp zero data`)
 		}
 
-		r = &offsetReader{Reader: bufio.NewReader(bytes.NewReader(b))}
-		args, err := decodeEventArgs(r, newState())
+		*evt = event.Event{}
+		s = newState(bytes.NewReader(b))
+		err = decodeEventArgs(s, evt)
 		if err == nil {
 			t.Error(`exp non-nil err`)
 		}
 		if !strings.Contains(err.Error(), "allocation limit") {
 			t.Errorf(`exp err for exceeding allocation limit; got %v`, err)
 		}
-		if len(args) != 0 {
+		if len(evt.Args) != 0 {
 			t.Error(`exp zero args`)
+		}
+	})
+}
+
+func TestDecodeHeader(t *testing.T) {
+	t.Run(`Latest`, func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		buf.Write(makeHeader(t, event.Latest))
+		dec := NewDecoder(buf)
+		err := decodeHeader(dec.state)
+		if err != nil {
+			t.Error(err)
+		}
+	})
+	t.Run(`Invalid`, func(t *testing.T) {
+		buf, header := new(bytes.Buffer), makeHeader(t, event.Latest)
+		header[5] = '0' // set invalid version
+		buf.Write(header)
+
+		dec := NewDecoder(buf)
+		err := decodeHeader(dec.state)
+		if err == nil {
+			t.Error(`exp non-nil error`)
 		}
 	})
 }
@@ -381,35 +423,35 @@ func TestDecodeUleb(t *testing.T) {
 	})
 }
 
-func runDecodeEventTest(t *testing.T, v Version, tests []testDecodeEvent) {
+func runDecodeEventTest(t *testing.T, v event.Version, tests []testDecodeEvent) {
 	for i, test := range tests {
 		t.Logf("test #%v exp %v args in %v bytes for %v\n",
 			i, len(test.exp), len(test.from), test.typ)
 
-		_, r, s := testStateSetup(t, v, test.from)
-		evt, err := decodeEvent(r, s)
+		evt := new(event.Event)
+		s := testDecodeSetup(t, v, test.from)
+
+		// quick hack to prevent forward-converting version1 events for this test
+		if v == event.Version1 {
+			s.ver = event.Latest
+		}
+		err := decodeEvent(s, evt)
 		if err != nil {
 			t.Fatalf(`exp nil err; got %v`, err)
 		}
-		if test.typ != evt.typ {
-			t.Fatalf(`exp event type %v; got %v`, test.typ, evt.typ)
+		if test.typ != evt.Type {
+			t.Fatalf(`exp event type %v; got %v`, test.typ, evt.Type)
 		}
-		if !reflect.DeepEqual(test.exp, evt.args) {
-			t.Fatalf(`exp %v; got %v`, test.exp, evt.args)
+		if !reflect.DeepEqual(test.exp, evt.Args) {
+			t.Fatalf(`exp %v; got %v`, test.exp, evt.Args)
 		}
 	}
-	fns := []decodeFn{
-		decodeEvent, decodeEventVersion1, decodeEventVersion2, decodeEventVersion3}
 	neg := func(t *testing.T, data []byte) {
-		for _, fn := range fns {
-			_, r, s := testStateSetup(t, v, data)
-			evt, err := fn(r, s)
-			if err == nil {
-				t.Error(`exp non-nil err`)
-			}
-			if evt != nil {
-				t.Fatalf(`exp nil event; got %v`, evt)
-			}
+		s := testDecodeSetup(t, v, data)
+		evt := new(event.Event)
+		err := decodeEvent(s, evt)
+		if err == nil {
+			t.Error(`exp non-nil err`)
 		}
 	}
 	t.Run(`Negative`, func(t *testing.T) {
@@ -430,58 +472,43 @@ func runDecodeEventTest(t *testing.T, v Version, tests []testDecodeEvent) {
 			})
 		}
 		t.Run(`Empty`, func(t *testing.T) {
-			neg(t, nil)
+			neg(t, make([]byte, 0, 0))
 		})
 	})
 }
 
-func TestDecodeEventVersionErr(t *testing.T) {
-	evt, err := decodeEventVersionErr(nil, nil)
-	if err == nil {
-		t.Error(`exp non-nil err`)
-	}
-	if evt != nil {
-		t.Fatalf(`exp nil event; got %v`, evt)
-	}
-}
+func TestDecodeEvents(t *testing.T) {
+	t.Run(event.Version1.Go(), func(t *testing.T) {
+		runDecodeEventTest(t, event.Version1, testEventsV1)
+		t.Run(`Unsupported`, func(t *testing.T) {
+			test := testEventsV2[len(testEventsV2)-1]
+			s := testDecodeSetup(t, event.Version1, test.from)
 
-func TestDecodeEventVersion1(t *testing.T) {
-	t.Run(Version1.Go(), func(t *testing.T) {
-		runDecodeEventTest(t, Version1, testEventsV1)
+			evt := new(event.Event)
+			err := decodeEvent(s, evt)
+			if err == nil {
+				t.Error(`exp non-nil err`)
+			}
+		})
 	})
-	t.Run(`Unsupported`, func(t *testing.T) {
-		test := testEventsV2[len(testEventsV2)-1]
-		_, r, s := testStateSetup(t, Version1, test.from)
-		evt, err := decodeEvent(r, s)
-		if err == nil {
-			t.Error(`exp non-nil err`)
-		}
-		if evt != nil {
-			t.Fatalf(`exp nil event; got %v`, evt)
-		}
-	})
-}
+	t.Run(event.Version2.Go(), func(t *testing.T) {
+		runDecodeEventTest(t, event.Version2, testEventsV2)
+		t.Run(`Unsupported`, func(t *testing.T) {
+			test := testEventsV3[len(testEventsV3)-1]
+			s := testDecodeSetup(t, event.Version2, test.from)
 
-func TestDecodeEventVersion2(t *testing.T) {
-	t.Run(Version2.Go(), func(t *testing.T) {
-		runDecodeEventTest(t, Version2, testEventsV2)
+			evt := new(event.Event)
+			err := decodeEvent(s, evt)
+			if err == nil {
+				t.Error(`exp non-nil err`)
+			}
+		})
 	})
-	t.Run(`Unsupported`, func(t *testing.T) {
-		test := testEventsV3[len(testEventsV3)-1]
-		_, r, s := testStateSetup(t, Version2, test.from)
-		evt, err := decodeEvent(r, s)
-		if err == nil {
-			t.Error(`exp non-nil err`)
-		}
-		if evt != nil {
-			t.Fatalf(`exp nil event; got %v`, evt)
-		}
+	t.Run(event.Version3.Go(), func(t *testing.T) {
+		runDecodeEventTest(t, event.Version4, testEventsV4)
 	})
-}
-
-func TestDecodeEventVersion3(t *testing.T) {
-	t.Run(Version3.Go(), func(t *testing.T) {
-		runDecodeEventTest(t, Version3, testEventsV3)
+	t.Run(event.Version4.Go(), func(t *testing.T) {
+		runDecodeEventTest(t, event.Version4, testEventsV4)
 	})
 }
 
@@ -491,13 +518,20 @@ func TestDecodeEventString(t *testing.T) {
 			t.Logf("test #%v exp %v args in %v bytes for String\n",
 				i, len(test.exp), len(test.from))
 
-			_, r, s := testStateSetup(t, Latest, test.from)
-			evt, err := decodeEvent(r, s)
+			s := testDecodeSetup(t, event.Latest, test.from)
+			evt := new(event.Event)
+			err := decodeEvent(s, evt)
 			if err != nil {
 				t.Fatalf(`exp nil err; got %v`, err)
 			}
-			if got := string(evt.data); test.exp != got {
+			if got := string(evt.Data); test.exp != got {
 				t.Fatalf(`exp %q; got %q`, test.exp, got)
+			}
+
+			// check failing on id
+			s = testDecodeSetup(t, event.Latest, test.from[0:1])
+			if err := decodeEvent(s, evt); err == nil {
+				t.Fatal(`exp non-nil err`)
 			}
 		}
 	})
@@ -509,13 +543,14 @@ func TestDecodeEventStack(t *testing.T) {
 			t.Logf("test #%v exp %v args in %v bytes for Stack\n",
 				i, len(test.exp), len(test.from))
 
-			_, r, s := testStateSetup(t, Latest, test.from)
-			evt, err := decodeEvent(r, s)
+			s := testDecodeSetup(t, event.Latest, test.from)
+			evt := new(event.Event)
+			err := decodeEvent(s, evt)
 			if err != nil {
 				t.Fatalf(`exp nil err; got %v`, err)
 			}
-			if !reflect.DeepEqual(test.exp, evt.args) {
-				t.Fatalf(`exp %v; got %v`, test.exp, evt.args)
+			if !reflect.DeepEqual(test.exp, evt.Args) {
+				t.Fatalf(`exp %v; got %v`, test.exp, evt.Args)
 			}
 		}
 	})

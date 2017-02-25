@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/cstockton/go-trace/event"
 )
 
 // Encoder writes events encoded in the Go trace format to an output stream.
@@ -39,10 +41,11 @@ func (e *Encoder) Reset(w io.Writer) {
 // Emit writes a single event to the the output stream. If Emit returns a
 // non-nil error then failure is permanent and all future calls will immediately
 // return the same error.
-func (e *Encoder) Emit(evt *Event) error {
+func (e *Encoder) Emit(evt *event.Event) error {
 	if e.encode == nil {
 		e.init()
 	}
+
 	// Once an error occurs the encoder may no longer be used.
 	if e.err != nil {
 		return e.err
@@ -64,7 +67,7 @@ func (e *Encoder) init() {
 		e.err = errors.New(`possible unsafe usage from multiple goroutines`)
 		return
 	}
-	e.encode, e.err = encodeInit(e.w, Latest)
+	e.encode, e.err = encodeInit(e.w, event.Latest)
 }
 
 type writer interface {
@@ -95,10 +98,10 @@ func (r *offsetWriter) WriteByte(b byte) (err error) {
 	return err
 }
 
-type encodeFn func(w writer, evt *Event) error
+type encodeFn func(w writer, evt *event.Event) error
 
 // encodeInit will simply send the header and return the Latest event fn.
-func encodeInit(w writer, v Version) (encodeFn, error) {
+func encodeInit(w writer, v event.Version) (encodeFn, error) {
 	if err := encodeHeader(w, v); err != nil {
 		return nil, err
 	}
@@ -107,15 +110,19 @@ func encodeInit(w writer, v Version) (encodeFn, error) {
 
 // encodeHeader will encode a valid trace version object into a well formed
 // trace header.
-func encodeHeader(w io.Writer, v Version) (err error) {
+func encodeHeader(w io.Writer, v event.Version) (err error) {
 	var n int
 	switch v {
-	case Version1:
+	case event.Version1:
 		n, err = w.Write([]byte("go 1.5 trace\x00\x00\x00\x00"))
-	case Version2:
+	case event.Version2:
 		n, err = w.Write([]byte("go 1.7 trace\x00\x00\x00\x00"))
-	case Version3:
+	case event.Version3:
 		n, err = w.Write([]byte("go 1.8 trace\x00\x00\x00\x00"))
+	case event.Version4:
+		n, err = w.Write([]byte("go 1.9 trace\x00\x00\x00\x00"))
+	default:
+		err = errors.New(`trace header version was invalid`)
 	}
 	if err == nil && n != 16 {
 		err = io.ErrShortWrite
@@ -124,8 +131,8 @@ func encodeHeader(w io.Writer, v Version) (err error) {
 }
 
 // encodeEvent will encode the given event to w.
-func encodeEvent(w writer, evt *Event) error {
-	if !evt.typ.Valid() {
+func encodeEvent(w writer, evt *event.Event) error {
+	if !evt.Type.Valid() {
 		return errors.New(`invalid trace event type`)
 	}
 
@@ -139,9 +146,9 @@ func encodeEvent(w writer, evt *Event) error {
 	// 	narg = 3
 	// }
 	switch {
-	case evt.typ == EvString:
+	case evt.Type == event.EvString:
 		return encodeEventString(w, evt)
-	case len(evt.args) < 4:
+	case len(evt.Args) < 4:
 		return encodeEventInline(w, evt)
 	default:
 		return encodeEventArgs(w, evt)
@@ -149,16 +156,16 @@ func encodeEvent(w writer, evt *Event) error {
 }
 
 // encodeEventInline will write a basic event with inline args to w.
-func encodeEventInline(w writer, evt *Event) error {
-	if len(evt.args) == 0 {
+func encodeEventInline(w writer, evt *event.Event) error {
+	if len(evt.Args) == 0 {
 		return errors.New(`expected at least 1 argument for event`)
 	}
 
-	typ, nargs := byte(evt.typ), byte(len(evt.args)-1)
+	typ, nargs := byte(evt.Type), byte(len(evt.Args)-1)
 	if err := w.WriteByte(typ | nargs<<traceArgCountShift); err != nil {
 		return err
 	}
-	for _, arg := range evt.args {
+	for _, arg := range evt.Args {
 		if err := encodeUleb(w, arg); err != nil {
 			return err
 		}
@@ -167,18 +174,18 @@ func encodeEventInline(w writer, evt *Event) error {
 }
 
 // encodeEventArgs will write a string event to w.
-func encodeEventArgs(w writer, evt *Event) error {
-	if len(evt.args) < 4 {
+func encodeEventArgs(w writer, evt *event.Event) error {
+	if len(evt.Args) < 4 {
 		return errors.New(`expected 4 or more arguments arguments for event`)
 	}
 
 	var buf bytes.Buffer
-	for _, arg := range evt.args {
+	for _, arg := range evt.Args {
 		encodeUleb(&buf, arg)
 	}
 
 	size := buf.Len()
-	byt := byte(evt.typ) | byte(3)<<traceArgCountShift
+	byt := byte(evt.Type) | byte(3)<<traceArgCountShift
 	if err := w.WriteByte(byt); err != nil {
 		return err
 	}
@@ -191,31 +198,31 @@ func encodeEventArgs(w writer, evt *Event) error {
 }
 
 // encodeEventString will write a string event to w.
-func encodeEventString(w writer, evt *Event) error {
-	if len(evt.args) == 0 {
+func encodeEventString(w writer, evt *event.Event) error {
+	if len(evt.Args) == 0 {
 		return errors.New(`expected at least 1 argument for event`)
 	}
 
 	var buf bytes.Buffer
-	for _, arg := range evt.args {
+	for _, arg := range evt.Args {
 		encodeUleb(&buf, arg)
 	}
 
 	// Strings do not provide an arg count.
-	if err := w.WriteByte(byte(evt.typ)); err != nil {
+	if err := w.WriteByte(byte(evt.Type)); err != nil {
 		return err
 	}
-	if err := encodeUleb(w, evt.args[0]); err != nil {
+	if err := encodeUleb(w, evt.Args[0]); err != nil {
 		return err
 	}
 
-	size := len(evt.data)
+	size := len(evt.Data)
 	if err := encodeUleb(w, uint64(size)); err != nil {
 		return err
 	}
 
-	n, err := w.Write(evt.data)
-	if err == nil && n != len(evt.data) {
+	n, err := w.Write(evt.Data)
+	if err == nil && n != len(evt.Data) {
 		err = io.ErrShortWrite
 	}
 	return err
