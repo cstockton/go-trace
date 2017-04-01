@@ -90,17 +90,29 @@ func (t Type) Args() []string {
 	return schemas[t%EvCount].Args
 }
 
+// Arg returns the arg index and a boolean true, or -1 and false if arg does not
+// exist in this event type.
+func (t Type) Arg(name string) (arg int, found bool) {
+	for idx, v := range schemas[t%EvCount].Args {
+		if v == name {
+			return idx, true
+		}
+	}
+	return
+}
+
 // String implements fmt.Stringer by returning a helpful string describing this
 // event type.
 func (t Type) String() string {
-	return fmt.Sprintf(`encoding.%v`, t.Name())
+	return fmt.Sprintf(`event.%v`, t.Name())
 }
 
-type Event struct {
+// // GoString implements fmt.GoStringer for this event type.
+// func (t Type) GoString() string {
+// 	return fmt.Sprintf(`event.Ev%v`, t.Name())
+// }
 
-	// Trace is the Go trace this event belongs to, will always be non-nil for
-	// traces produced by this library.
-	// Trace *Trace
+type Event struct {
 
 	// Type is the type of this Event.
 	Type Type
@@ -134,13 +146,38 @@ type Event struct {
 	// // For Version2 and later this is set to the order the Event was emitted from
 	// // the input stream although it is not used.
 	// Seq uint64
+}
 
-	// // Stack is the Stack trace associated with this event, if any. It's possible
-	// // that events which should have a stack are the zero value for one of two
-	// // reasons, the stack event was not yet sent over the wire or the Stack was
-	// // omitted entirely by the runtime. Stacks may be shared across multiple
-	// // events and should not be mutated, make a copy instead.
-	// Stack Stack
+// Get returns a argument by name, or the zero value if it doesn't exist.
+func (e *Event) Get(name string) uint64 {
+	if idx, has := e.Type.Arg(name); has && idx <= len(e.Args) {
+		return e.Args[idx]
+	}
+	return 0
+}
+
+// Lookup returns the arg and a boolean true, or zero value and false if arg
+// does not exist in this event type.
+func (e *Event) Lookup(name string) (arg uint64, found bool) {
+	for idx, v := range schemas[e.Type%EvCount].Args {
+		if idx > len(e.Args) {
+			return
+		}
+		if v == name {
+			return e.Args[idx], true
+		}
+	}
+	return
+}
+
+// Copy will return a deep copy of this event.
+func (e *Event) Copy() *Event {
+	evt := new(Event)
+	*evt = *e
+	evt.Args, evt.Data = make([]uint64, len(e.Args)), make([]byte, len(e.Data))
+	copy(evt.Args, e.Args)
+	copy(evt.Data, e.Data)
+	return evt
 }
 
 // Reset will reset this event for reuse.
@@ -151,7 +188,7 @@ func (e *Event) Reset() {
 
 // String implements fmt.Stringer by returning a helpful string describing this
 // event type.
-func (e *Event) String() string {
+func (e Event) String() string {
 	switch e.Type {
 	case EvString:
 		return fmt.Sprintf(`encoding.%v(%q)`, schemas[e.Type%EvCount].Name, string(e.Data))
@@ -162,6 +199,13 @@ func (e *Event) String() string {
 }
 
 type Stack []Frame
+
+// func NewStack(evt Event) (Stack, error) {
+// 	if evt.Trace == nil {
+// 		return nil, errors.New(`cannot decode stack from event with no trace`)
+// 	}
+// 	return nil, nil
+// }
 
 func (s Stack) Empty() bool {
 	return len(s) == 0
@@ -176,11 +220,38 @@ func (s Stack) String() string {
 	return buf.String()
 }
 
+// type Frame struct {
+// 	// PC, Line   uint64
+// 	// Func, File string
+// }
+//
+// func (f Frame) String() string {
+// 	return fmt.Sprintf("%v [PC %v]\n\t%v:%v", f.Func, f.PC, f.File, f.Line)
+// }
+
 type Frame struct {
-	PC, Line   uint64
-	Func, File string
+	tr           *Trace
+	pc, fn, file uint64
+	line         int
+}
+
+func (f Frame) PC() uint64 {
+	return f.pc
+}
+
+func (f Frame) Func() string {
+	return f.tr.getStringDefault(f.fn)
+}
+
+func (f Frame) File() string {
+	return f.tr.getStringDefault(f.file)
+}
+
+func (f Frame) Line() int {
+	return f.line
 }
 
 func (f Frame) String() string {
-	return fmt.Sprintf("%v [PC %v]\n\t%v:%v", f.Func, f.PC, f.File, f.Line)
+	return fmt.Sprintf("%v [%v]\n\t%v:%v",
+		f.Func(), f.PC(), f.File(), f.Line())
 }

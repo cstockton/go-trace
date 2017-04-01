@@ -85,6 +85,11 @@ func (v Version) String() string {
 	return fmt.Sprintf(`Version(#%d [Go %v])`, v, v.Go())
 }
 
+// // GoString implements fmt.GoStringer for this event type.
+// func (v Version) GoString() string {
+// 	return fmt.Sprintf(`event.Version%d`, int(v))
+// }
+
 func init() {
 	for typ, s := range schemas {
 		for i := s.Since; i <= Version4; i++ {
