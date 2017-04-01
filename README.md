@@ -9,21 +9,6 @@
   > ```bash
   > go get -u github.com/cstockton/go-trace
   > ```
-  >
-  > Example:
-  > ```Go
-  > mknod trace.fifo p
-  > go test -trace trace.fifo &
-  > tracecat trace.fifo | grep GoCreate | wc -l
-  > ```
-  >
-  > Output:
-  > ```Go
-  > PASS
-  > ok  	github.com/cstockton/go-trace/encoding	2.208s
-  > 335 <===== 335 goroutines created
-  > [1]+  Done                    go test -trace trace.fifo
-  > ```
 
 
 ## Intro
