@@ -1,34 +1,35 @@
 package encoding_test
 
 import (
-	"bytes"
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"github.com/cstockton/go-trace/encoding"
 	"github.com/cstockton/go-trace/event"
 )
 
 func Example() {
-	data, err := ioutil.ReadFile(`../internal/tracefile/testdata/go1.8/log.trace`)
+	f, err := os.Open(`../internal/tracefile/testdata/go1.8/log.trace`)
 	if err != nil {
 		fmt.Println(`Err:`, err)
 		return
 	}
+	defer f.Close()
 
-	var i, created int
-	evt := new(event.Event)
-	dec := encoding.NewDecoder(bytes.NewReader(data))
-	for dec.More() {
+	var (
+		created int
+		evt     event.Event
+		dec     = encoding.NewDecoder(f)
+	)
+	for i := 1; dec.More(); i++ {
 		evt.Reset()
-		err := dec.Decode(evt)
-		if err != nil {
+		if err := dec.Decode(&evt); err != nil {
 			break // err will be in Err()
 		}
 		if evt.Type == event.EvGoCreate {
-			created++
+			created++ // Count all the GoCreate events.
 		}
-		if i += 1; i%40 == 0 {
+		if i%40 == 0 {
 			fmt.Println(evt.Type) // printing a sampling of data
 		}
 	}
@@ -38,14 +39,14 @@ func Example() {
 	fmt.Printf("\nCreated %v goroutines\n", created)
 
 	// Output:
-	// encoding.HeapAlloc
-	// encoding.HeapAlloc
-	// encoding.HeapAlloc
-	// encoding.GoCreate
-	// encoding.ProcStop
-	// encoding.String
-	// encoding.String
-	// encoding.Stack
+	// event.HeapAlloc
+	// event.HeapAlloc
+	// event.HeapAlloc
+	// event.GoCreate
+	// event.ProcStop
+	// event.String
+	// event.String
+	// event.Stack
 	//
 	// Created 12 goroutines
 }

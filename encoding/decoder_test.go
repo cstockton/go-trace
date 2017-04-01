@@ -115,7 +115,7 @@ func TestDecoder(t *testing.T) {
 func TestState(t *testing.T) {
 	t.Run(`Reset`, func(t *testing.T) {
 		// nil state Reader should get a new Reader
-		s := new(state)
+		s := newState(nil)
 		s.Reset(new(bytes.Buffer))
 		if s.Reader == nil {
 			t.Fatal(`expected non-nil *bufio.Reader`)
@@ -182,9 +182,6 @@ func checkDecoderInit(t *testing.T, dec *Decoder) {
 	}
 	if dec.state.argoff != 0 {
 		t.Fatal(`initial decode state argOffset should be 0`)
-	}
-	if dec.state.count != 0 {
-		t.Fatal(`initial decode state count should be 0`)
 	}
 	if off := dec.state.off; off != 0 {
 		t.Fatalf(`initial writer offset should clear, but got: %v`, off)

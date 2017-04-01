@@ -120,16 +120,12 @@ func (d *Decoder) Decode(evt *event.Event) error {
 	if err := decodeEvent(d.state, evt); err != nil {
 		return d.halt(err)
 	}
-	d.state.count++
 	return nil
 }
 
-// halt is called anytime an error occurs, if err was io.EOF before we received
-// a complete event it will set the error state to UnexpectedEOF isntead.
+// halt is called anytime an error occurs, setting permanent error state for
+// this Decoder.
 func (d *Decoder) halt(err error) error {
-	if err == io.EOF && d.state.count == 0 {
-		err = io.ErrUnexpectedEOF
-	}
 	d.err = err
 	return d.err
 }
@@ -148,9 +144,9 @@ func (d *Decoder) init() {
 
 type state struct {
 	*bufio.Reader
-	ver        event.Version
-	off, count int
-	argoff     int
+	ver    event.Version
+	off    int
+	argoff int
 }
 
 func newState(r io.Reader) *state {
@@ -232,7 +228,6 @@ func decodeHeader(s *state) error {
 // decodeEvent is the top level entry function for decoding events. It will
 // decode from the given state into evt, returning an err on failure.
 func decodeEvent(s *state, evt *event.Event) error {
-
 	// Retrieve and validate the event type.
 	args, err := decodeEventType(s, evt)
 	if err != nil {
@@ -323,6 +318,9 @@ func decodeEventString(s *state, evt *event.Event) error {
 	// This first arg represents the byte length of the message.
 	size, err := decodeUleb(s)
 	if err != nil {
+		if err == io.EOF {
+			return io.ErrUnexpectedEOF
+		}
 		return err
 	}
 	if maxMakeSize < size {
@@ -353,6 +351,7 @@ func decodeEventArgs(s *state, evt *event.Event) error {
 		return fmt.Errorf(
 			"argument count %v exceeds allocation limit(%v)", v, maxMakeSize)
 	}
+	evt.Args = evt.Args[0:0]
 
 	until := s.off + int(v)
 	for s.off < until {
@@ -379,6 +378,9 @@ func decodeEventInline(r io.ByteReader, n int, evt *event.Event) error {
 	for i := 0; i < n; i++ {
 		v, err := decodeUleb(r)
 		if err != nil {
+			if err == io.EOF {
+				return io.ErrUnexpectedEOF
+			}
 			return err
 		}
 		evt.Args[i] = v
