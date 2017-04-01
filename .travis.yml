@@ -18,6 +18,7 @@ before_install:
 
 script:
   - go test -coverprofile=encoding.cov github.com/cstockton/go-trace/encoding
+  - go test -coverprofile=trace.cov github.com/cstockton/go-trace
 
 after_success:
-  - bash <(curl -s https://codecov.io/bash) -f encoding.cov
+  - bash <(curl -s https://codecov.io/bash) -f "*.cov"
