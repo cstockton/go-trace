@@ -64,7 +64,7 @@ the encoding package.
   > 	fmt.Println(`Err:`, err)
   > 	return
   > }
-
+  >
   > var i, created int
   > dec := encoding.NewDecoder(bytes.NewReader(data))
   > for dec.More() {
