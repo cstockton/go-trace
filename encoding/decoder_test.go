@@ -81,6 +81,13 @@ func TestDecoder(t *testing.T) {
 		if dec.Reset(nil); dec.err == nil {
 			t.Error(`exp non-nil err`)
 		}
+		s := new(state)
+		if s.Reset(nil); dec.err == nil {
+			t.Error(`exp non-nil err`)
+		}
+		if s.Reader == nil {
+			t.Error(`exp non-nil bufio.Reader`)
+		}
 	})
 	t.Run(`NilEvent`, func(t *testing.T) {
 		dec := NewDecoder(new(bytes.Buffer))
@@ -90,25 +97,59 @@ func TestDecoder(t *testing.T) {
 		}
 	})
 	t.Run(`UnexpectedEOF`, func(t *testing.T) {
-		dec := NewDecoder(new(bytes.Buffer))
-		evt := new(event.Event)
-		sentinel := dec.Decode(evt)
-		if sentinel != io.ErrUnexpectedEOF {
-			t.Fatalf(`exp io.ErrUnexpectedEOF sentinel err, got: %v`, sentinel)
-		}
-		if evt.Type != event.EvNone {
-			t.Fatalf(`decoded event type should be EvNone; got %v`, evt)
-		}
+		t.Run(`decodeEvent`, func(t *testing.T) {
+			dec := NewDecoder(new(bytes.Buffer))
+			evt := new(event.Event)
+			err := dec.Decode(evt)
+			if err != io.ErrUnexpectedEOF {
+				t.Fatalf(`exp io.ErrUnexpectedEOF sentinel err, got: %v`, err)
+			}
+			if evt.Type != event.EvNone {
+				t.Fatalf(`decoded event type should be EvNone; got %v`, evt)
+			}
 
-		// cause next decode to yield unexpected iof during Decode()
-		buf := makeBuffer(t, event.Latest, 1)
-		dec.Reset(bytes.NewReader(buf.Bytes()[:buf.Len()-2]))
-		checkDecoderInit(t, dec)
+			// cause next decode to yield unexpected iof during Decode()
+			buf := makeBuffer(t, event.Latest, 1)
+			dec.Reset(bytes.NewReader(buf.Bytes()[:buf.Len()-2]))
+			checkDecoderInit(t, dec)
 
-		sentinel = dec.Decode(evt)
-		if sentinel != io.ErrUnexpectedEOF {
-			t.Fatalf(`exp io.ErrUnexpectedEOF sentinel err, got: %v`, sentinel)
-		}
+			err = dec.Decode(evt)
+			if err != io.ErrUnexpectedEOF {
+				t.Fatalf(`exp io.ErrUnexpectedEOF sentinel err, got: %v`, err)
+			}
+		})
+		t.Run(`decodeEventInline`, func(t *testing.T) {
+			evt := new(event.Event)
+			err := decodeEventInline(new(bytes.Buffer), 4, evt)
+			if err != io.ErrUnexpectedEOF {
+				t.Fatalf(`exp io.ErrUnexpectedEOF err, got: %v`, err)
+			}
+		})
+		t.Run(`decodeEventInlinePropagation`, func(t *testing.T) {
+			sentinel := errors.New(`sentinel`)
+			evt := new(event.Event)
+			err := decodeEventInline(&rwLimiter{err: sentinel}, 4, evt)
+			if err != sentinel {
+				t.Fatalf(`exp %v err, got: %v`, sentinel, err)
+			}
+		})
+		t.Run(`decodeEventString`, func(t *testing.T) {
+			evt := new(event.Event)
+			dec := NewDecoder(new(bytes.Buffer))
+			err := decodeEventString(dec.state, evt)
+			if err != io.ErrUnexpectedEOF {
+				t.Fatalf(`exp io.ErrUnexpectedEOF err, got: %v`, err)
+			}
+		})
+		t.Run(`decodeEventStringPropagation`, func(t *testing.T) {
+			sentinel := errors.New(`sentinel`)
+			evt := new(event.Event)
+			dec := NewDecoder(&rwLimiter{err: sentinel})
+			err := decodeEventString(dec.state, evt)
+			if err != sentinel {
+				t.Fatalf(`exp %v err, got: %v`, sentinel, err)
+			}
+		})
 	})
 }
 

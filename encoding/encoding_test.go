@@ -36,9 +36,6 @@ func runEncodingTest(t *testing.T, tf *tracefile.Trace, b []byte, r io.Reader) {
 				t.Fatal(err)
 			}
 			w.Reset()
-			if evt.Type == event.EvGoSysExitLocal {
-				fmt.Println(evt.Args)
-			}
 
 			// Use the comprehensive decoder testing to prove the Encoder correct
 			// through invariant Dec(Enc(Dec(Input)))
@@ -78,6 +75,21 @@ func TestEncoding(t *testing.T) {
 			// test small traces with a couple iotest readers as well.
 			runEncodingTest(t, tf, b, iotest.HalfReader(bytes.NewReader(b)))
 			runEncodingTest(t, tf, b, iotest.HalfReader(bytes.NewReader(b)))
+
+			// if tf.Version == event.Latest {
+			// 	// ensure no panics and touch all paths for UnexpectedEOF.
+			// 	t.Run(`UnexpectedEOF`, func(t *testing.T) {
+			// 		evt := new(event.Event)
+			//
+			// 		for i := len(b) - 2; i > 0; i-- {
+			// 			dec := NewDecoder(bytes.NewReader(b[0:i]))
+			// 			for dec.More() {
+			// 				dec.Decode(evt)
+			// 				evt.Reset()
+			// 			}
+			// 		}
+			// 	})
+			// }
 			fallthrough
 		case size > 1e5:
 			if testing.Short() {
@@ -249,12 +261,16 @@ func chkErr(exp interface{}, err error) error {
 type rwLimiter struct {
 	w   io.Writer
 	r   io.Reader
+	b   io.ByteReader
 	n   int
 	off int
 	err error
 }
 
 func (l *rwLimiter) Write(p []byte) (int, error) {
+	if l.err != nil && l.n == 0 {
+		return 0, l.err
+	}
 	if off := l.off + len(p); off > l.n {
 		return len(p) / 2, l.err
 	}
@@ -264,12 +280,27 @@ func (l *rwLimiter) Write(p []byte) (int, error) {
 }
 
 func (l *rwLimiter) Read(p []byte) (int, error) {
+	if l.err != nil && l.n == 0 {
+		return 0, l.err
+	}
 	if off := l.off + len(p); off > l.n {
 		return off - l.off, l.err
 	}
 	n, err := l.r.Read(p)
 	l.off += n
 	return n, err
+}
+
+func (l *rwLimiter) ReadByte() (byte, error) {
+	if l.err != nil && l.n == 0 {
+		return 0, l.err
+	}
+	if off := l.off + 1; off > l.n {
+		return 0, l.err
+	}
+	b, err := l.b.ReadByte()
+	l.off++
+	return b, err
 }
 
 type testDecodeEvent struct {
