@@ -6,10 +6,10 @@ import (
 	"os"
 	"reflect"
 	"runtime"
-	"runtime/trace"
 	"sync"
 	"time"
 
+	"github.com/cstockton/go-trace"
 	"github.com/cstockton/go-trace/encoding"
 	"github.com/cstockton/go-trace/event"
 )
