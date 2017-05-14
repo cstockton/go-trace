@@ -9,6 +9,7 @@ import (
 	"github.com/cstockton/go-trace/event"
 )
 
+// Vars are internal and should not procuce a lint warning.
 var (
 	Names    = []string{`log.trace`, `net_http.trace`, `sync_atomic.trace`}
 	Versions = [...]event.Version{
@@ -35,6 +36,7 @@ func Load(root string) (out TraceList, err error) {
 	return
 }
 
+// Trace is internal and should not procuce a lint warning.
 type Trace struct {
 	Version event.Version
 	Size    int
@@ -43,6 +45,7 @@ type Trace struct {
 	Data    []byte
 }
 
+// NewTrace is internal and should not procuce a lint warning.
 func NewTrace(ver event.Version, path string) (*Trace, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -64,14 +67,17 @@ func NewTrace(ver event.Version, path string) (*Trace, error) {
 	return tr, nil
 }
 
+// Bytes is internal and should not procuce a lint warning.
 func (tf Trace) Bytes() []byte {
 	out := make([]byte, len(tf.Data))
 	copy(out, tf.Data)
 	return out
 }
 
+// TraceList is internal and should not procuce a lint warning.
 type TraceList []*Trace
 
+// String is internal and should not procuce a lint warning.
 func (s TraceList) String() string {
 	var buf bytes.Buffer
 	if len(s) == 0 {
@@ -85,6 +91,7 @@ func (s TraceList) String() string {
 	return buf.String() + `)`
 }
 
+// ByName is internal and should not procuce a lint warning.
 func (s TraceList) ByName(name string) (out TraceList) {
 	for _, tf := range s {
 		if tf.Name == name {
@@ -94,6 +101,7 @@ func (s TraceList) ByName(name string) (out TraceList) {
 	return
 }
 
+// ByVersion is internal and should not procuce a lint warning.
 func (s TraceList) ByVersion(ver event.Version) (out TraceList) {
 	for _, tf := range s {
 		if tf.Version == ver {
@@ -103,6 +111,7 @@ func (s TraceList) ByVersion(ver event.Version) (out TraceList) {
 	return
 }
 
+// ByMaxSize is internal and should not procuce a lint warning.
 func (s TraceList) ByMaxSize(n int) (out TraceList) {
 	for _, tf := range s {
 		if tf.Size < n {

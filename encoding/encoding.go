@@ -9,7 +9,7 @@
 // events during decoding to make them immediately available without allocation
 // with large performance gains. It is fast enough to easily allow decoding in
 // the same process that is performing the tracing, enabling you to defer writes
-// to network/disk until interesting occurences happen.
+// to network/disk until interesting occurrences happen.
 //
 // Most of the API closely resembles events emitted from the runtime. To get a
 // quick primer I suggest starting with the "Go Execution Tracer" design
@@ -19,7 +19,7 @@
 // the scheduler design doc at https://golang.org/s/go11sched. It's a bit dated
 // but remains conceptually accurate and serves as a good primer. After that
 // https://github.com/golang/go/wiki/DesignDocuments for GC, preemption,
-// syscalls and everything else. Recently I also came accross runtime/HACKING.md
+// syscalls and everything else. Recently I also came across runtime/HACKING.md
 // in Go master which provides some good material as well.
 //
 // Compatibility

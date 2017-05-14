@@ -237,7 +237,7 @@ func decodeEvent(s *state, evt *event.Event) error {
 		return fmt.Errorf(`version %v does not support event %v`, s.ver, evt.Type)
 	}
 
-	// Set the event offset, accomodating the Type we just read.
+	// Set the event offset, accommodating the Type we just read.
 	evt.Off = s.off - 1
 
 	// Decode the event data.
@@ -248,7 +248,7 @@ func decodeEvent(s *state, evt *event.Event) error {
 // an err on failure. It will read the arguments using the state argOffset
 // which represents the current versions minimum inline arguments minus the
 // target versions. This allows version 1 which always had two argument
-// (see decodeEventType) to be shared accross versions.
+// (see decodeEventType) to be shared across versions.
 func decodeEventData(s *state, evt *event.Event, args int) error {
 	switch {
 	case evt.Type == event.EvString:

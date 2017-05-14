@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// Trace maintains the shared satate across events.
 type Trace struct {
 	Version      Version
 	Strings      map[uint64]string
@@ -13,6 +14,8 @@ type Trace struct {
 	stackVisitFn func(evt *Event) error
 }
 
+// NewTrace will create a new trace for the given version, or return an error if
+// the version is unknown.
 func NewTrace(v Version) (*Trace, error) {
 	tr := &Trace{
 		Version: v,
@@ -133,7 +136,7 @@ func (tr *Trace) visitString(evt *Event) error {
 // visitStack will add a Stack to this state from a decoded stack Event
 // according to the FrameSize in the current state. The FrameSize may be 1 or 4
 // and determines the stack frame offsets when constructing the stack. This is
-// to accomodate PC only frames in Version1. The FN will be called each
+// to accommodate PC only frames in Version1. The FN will be called each
 // iteration and expected to return a valid non-nil *Frame.
 func (tr *Trace) visitStack(evt *Event) error {
 	if evt.Type != EvStack {

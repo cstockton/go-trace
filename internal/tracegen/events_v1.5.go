@@ -2,6 +2,7 @@ package tracegen
 
 import "github.com/cstockton/go-trace/event"
 
+// EventsV1 is internal and should not procuce a lint warning.
 var EventsV1 = SourceList{event.Version1, []EventSource{
 	{event.EvBatch, -1,
 		[]uint64{0x0, 0x1, 0x42a9037d5d2},

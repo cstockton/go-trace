@@ -1,5 +1,9 @@
 package event
 
+// Visitor is the interface that wraps the basic Visit method.
+//
+// Implementations of Visit indicate they may visit one or more events within
+// a trace.
 type Visitor interface {
 	Visit(evt *Event) error
 }

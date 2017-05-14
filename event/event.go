@@ -112,6 +112,7 @@ func (t Type) String() string {
 // 	return fmt.Sprintf(`event.Ev%v`, t.Name())
 // }
 
+// Event provides access to trace data for the Go execution tracer.
 type Event struct {
 
 	// Type is the type of this Event.
@@ -135,8 +136,8 @@ type Event struct {
 	// Ts is the timestamp of the event.
 	Ts int64
 
-	// Off is the offset of the first byte for this Event relative to the begining
-	// of the input stream.
+	// Off is the offset of the first byte for this Event relative to the
+	// beginning of the input stream.
 	Off int
 
 	// // Seq is the sequence of the event.
@@ -198,19 +199,15 @@ func (e Event) String() string {
 	return fmt.Sprintf(`encoding.%v`, schemas[e.Type%EvCount].Name)
 }
 
+// Stack is a slice of Frame.
 type Stack []Frame
 
-// func NewStack(evt Event) (Stack, error) {
-// 	if evt.Trace == nil {
-// 		return nil, errors.New(`cannot decode stack from event with no trace`)
-// 	}
-// 	return nil, nil
-// }
-
+// Empty reports if the current stack is empty.
 func (s Stack) Empty() bool {
 	return len(s) == 0
 }
 
+// Strings implements fmt.Stringer.
 func (s Stack) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("encoding.Stack[%v]:\n", len(s)))
@@ -220,37 +217,34 @@ func (s Stack) String() string {
 	return buf.String()
 }
 
-// type Frame struct {
-// 	// PC, Line   uint64
-// 	// Func, File string
-// }
-//
-// func (f Frame) String() string {
-// 	return fmt.Sprintf("%v [PC %v]\n\t%v:%v", f.Func, f.PC, f.File, f.Line)
-// }
-
+// Frame is a single frame within an stack trace.
 type Frame struct {
 	tr           *Trace
 	pc, fn, file uint64
 	line         int
 }
 
+// PC is the program counter of this frame.
 func (f Frame) PC() uint64 {
 	return f.pc
 }
 
+// Func is the enclosing function of this frame.
 func (f Frame) Func() string {
 	return f.tr.getStringDefault(f.fn)
 }
 
+// File of this frame.
 func (f Frame) File() string {
 	return f.tr.getStringDefault(f.file)
 }
 
+// Line of this frame.
 func (f Frame) Line() int {
 	return f.line
 }
 
+// Strings implements fmt.Stringer.
 func (f Frame) String() string {
 	return fmt.Sprintf("%v [%v]\n\t%v:%v",
 		f.Func(), f.PC(), f.File(), f.Line())

@@ -1,3 +1,4 @@
+// Package tracegen provides internal utilities.
 package tracegen
 
 import (
@@ -9,11 +10,13 @@ import (
 	"path/filepath"
 )
 
+// Generator is internal and should not procuce a lint warning.
 type Generator struct {
 	P, Bin string
 	N, S   int
 }
 
+// Run is internal and should not procuce a lint warning.
 func (g Generator) Run(ctx context.Context, w io.Writer) error {
 	if err := g.Build(ctx); err != nil {
 		return err
@@ -35,6 +38,7 @@ func (g Generator) Run(ctx context.Context, w io.Writer) error {
 	return cmd.Wait()
 }
 
+// Build is internal and should not procuce a lint warning.
 func (g *Generator) Build(ctx context.Context) error {
 	stat, err := os.Stat(g.Bin)
 	if err == nil && stat.IsDir() {
@@ -61,6 +65,7 @@ func (g *Generator) Build(ctx context.Context) error {
 	return cmd.Run()
 }
 
+// New is internal and should not procuce a lint warning.
 func New(p string) (*Generator, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
