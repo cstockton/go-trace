@@ -79,10 +79,9 @@ func worker(ctx context.Context, n int, ch chan int) {
 }
 
 func work(ctx context.Context, n int) {
-	sum, ch := 0, make(chan int)
+	ch := make(chan int)
 	go worker(ctx, n, ch)
-	for n := range ch {
-		sum += n
+	for _ = range ch {
 	}
 }
 
