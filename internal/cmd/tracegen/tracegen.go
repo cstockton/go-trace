@@ -81,7 +81,7 @@ func worker(ctx context.Context, n int, ch chan int) {
 func work(ctx context.Context, n int) {
 	ch := make(chan int)
 	go worker(ctx, n, ch)
-	for _ = range ch {
+	for range ch {
 	}
 }
 
