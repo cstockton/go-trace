@@ -128,58 +128,58 @@ type schema struct {
 const schemasCount = len(schemas)
 
 var schemas = [...]schema{
-	schema{"None", 0, []string{}},
-	schema{"Batch", Version1, []string{ArgProcessorID, ArgTimestamp}},
-	schema{"Frequency", Version1, []string{ArgFrequency}},
-	schema{"Stack", Version1, []string{ArgStackID, ArgStackSize}},
-	schema{"Gomaxprocs", Version1, []string{
+	{"None", 0, []string{}},
+	{"Batch", Version1, []string{ArgProcessorID, ArgTimestamp}},
+	{"Frequency", Version1, []string{ArgFrequency}},
+	{"Stack", Version1, []string{ArgStackID, ArgStackSize}},
+	{"Gomaxprocs", Version1, []string{
 		ArgTimestamp, ArgGomaxprocs, ArgStackID}},
-	schema{"ProcStart", Version1, []string{ArgTimestamp, ArgThreadID}},
-	schema{"ProcStop", Version1, []string{ArgTimestamp}},
-	schema{"GCStart", Version1, []string{
+	{"ProcStart", Version1, []string{ArgTimestamp, ArgThreadID}},
+	{"ProcStop", Version1, []string{ArgTimestamp}},
+	{"GCStart", Version1, []string{
 		ArgTimestamp, ArgSequenceGC, ArgStackID}},
-	schema{"GCDone", Version1, []string{ArgTimestamp}},
-	schema{"GCScanStart", Version1, []string{ArgTimestamp}},
-	schema{"GCScanDone", Version1, []string{ArgTimestamp}},
-	schema{"GCSweepStart", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GCSweepDone", Version1, []string{ArgTimestamp}},
-	schema{"GoCreate", Version1, []string{
+	{"GCDone", Version1, []string{ArgTimestamp}},
+	{"GCScanStart", Version1, []string{ArgTimestamp}},
+	{"GCScanDone", Version1, []string{ArgTimestamp}},
+	{"GCSweepStart", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GCSweepDone", Version1, []string{ArgTimestamp}},
+	{"GoCreate", Version1, []string{
 		ArgTimestamp, ArgNewGoroutineID, ArgNewStackID, ArgStackID}},
-	schema{"GoStart", Version1, []string{
+	{"GoStart", Version1, []string{
 		ArgTimestamp, ArgGoroutineID, ArgSequence}},
-	schema{"GoEnd", Version1, []string{ArgTimestamp}},
-	schema{"GoStop", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoSched", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoPreempt", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoSleep", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoBlock", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoUnblock", Version1, []string{
+	{"GoEnd", Version1, []string{ArgTimestamp}},
+	{"GoStop", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoSched", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoPreempt", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoSleep", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoBlock", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoUnblock", Version1, []string{
 		ArgTimestamp, ArgGoroutineID, ArgSequence, ArgStackID}},
-	schema{"GoBlockSend", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoBlockRecv", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoBlockSelect", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoBlockSync", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoBlockCond", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoBlockNet", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoSysCall", Version1, []string{ArgTimestamp, ArgStackID}},
-	schema{"GoSysExit", Version1, []string{
+	{"GoBlockSend", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoBlockRecv", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoBlockSelect", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoBlockSync", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoBlockCond", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoBlockNet", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoSysCall", Version1, []string{ArgTimestamp, ArgStackID}},
+	{"GoSysExit", Version1, []string{
 		ArgTimestamp, ArgGoroutineID, ArgSequence, ArgRealTimestamp}},
-	schema{"GoSysBlock", Version1, []string{ArgTimestamp}},
-	schema{"GoWaiting", Version1, []string{ArgTimestamp, ArgGoroutineID}},
-	schema{"GoInSyscall", Version1, []string{ArgTimestamp, ArgGoroutineID}},
-	schema{"HeapAlloc", Version1, []string{ArgTimestamp, ArgHeapAlloc}},
-	schema{"NextGC", Version1, []string{ArgTimestamp, ArgNextGC}},
-	schema{"TimerGoroutine", Version1, []string{ArgGoroutineID}},
-	schema{"FutileWakeup", Version1, []string{ArgTimestamp}},
-	schema{"String", Version2, []string{ArgStringID}},
-	schema{"GoStartLocal", Version2, []string{ArgTimestamp, ArgGoroutineID}},
-	schema{"GoUnblockLocal", Version2, []string{
+	{"GoSysBlock", Version1, []string{ArgTimestamp}},
+	{"GoWaiting", Version1, []string{ArgTimestamp, ArgGoroutineID}},
+	{"GoInSyscall", Version1, []string{ArgTimestamp, ArgGoroutineID}},
+	{"HeapAlloc", Version1, []string{ArgTimestamp, ArgHeapAlloc}},
+	{"NextGC", Version1, []string{ArgTimestamp, ArgNextGC}},
+	{"TimerGoroutine", Version1, []string{ArgGoroutineID}},
+	{"FutileWakeup", Version1, []string{ArgTimestamp}},
+	{"String", Version2, []string{ArgStringID}},
+	{"GoStartLocal", Version2, []string{ArgTimestamp, ArgGoroutineID}},
+	{"GoUnblockLocal", Version2, []string{
 		ArgTimestamp, ArgGoroutineID, ArgStackID}},
-	schema{"GoSysExitLocal", Version2, []string{
+	{"GoSysExitLocal", Version2, []string{
 		ArgTimestamp, ArgGoroutineID, ArgRealTimestamp}},
-	schema{"GoStartLabel", Version3, []string{
+	{"GoStartLabel", Version3, []string{
 		ArgTimestamp, ArgGoroutineID, ArgSequence, ArgLabelStringID}},
-	schema{"GoBlockGC", Version3, []string{ArgTimestamp, ArgStackID}},
-	schema{"EvGCMarkAssistStart", Version4, []string{ArgTimestamp, ArgStackID}},
-	schema{"EvGCMarkAssistDone", Version4, []string{ArgTimestamp}},
+	{"GoBlockGC", Version3, []string{ArgTimestamp, ArgStackID}},
+	{"EvGCMarkAssistStart", Version4, []string{ArgTimestamp, ArgStackID}},
+	{"EvGCMarkAssistDone", Version4, []string{ArgTimestamp}},
 }
