@@ -3,7 +3,7 @@ package event
 import "testing"
 
 func TestVersionDrift(t *testing.T) {
-	if Latest != Version3 {
+	if Latest != Version4 {
 		// When adding Version4 this will help remind me to update tests that
 		// literal versions are used.
 		t.Fatal(`Make sure to update tests where Versions are used.`)
@@ -20,10 +20,10 @@ func TestVersionValid(t *testing.T) {
 		{Version3, true},
 		{Version4, true},
 		{Latest, true},
-		{Latest + 1, true},
+		{Latest + 1, false},
 		{Latest + 2, false},
 		{Latest + 3, false},
-		{Latest - Latest, false},
+		{0, false},
 	}
 	for i, test := range tests {
 		t.Logf(`test #%v exp version %q.Valid() to be %v`, i, test.ver, test.exp)
@@ -62,11 +62,11 @@ func TestVersionGo(t *testing.T) {
 		{Version2, `1.7`},
 		{Version3, `1.8`},
 		{Version4, `1.9`},
-		{Latest, `1.8`},
-		{Latest + 1, `1.9`},
+		{Latest, `1.9`},
+		{Latest + 1, `None`},
 		{Latest + 2, `None`},
 		{Latest + 3, `None`},
-		{Latest - Latest, `None`},
+		{0, `None`},
 	}
 	for i, test := range tests {
 		t.Logf(`test #%v exp version %d Go() to be %v`, i, test.ver, test.exp)
@@ -86,11 +86,11 @@ func TestVersionTypes(t *testing.T) {
 		{Version2, 41},
 		{Version3, 43},
 		{Version4, int(EvCount)},
-		{Latest, 43},
-		{Latest + 1, 45},
+		{Latest, int(EvCount)},
+		{Latest + 1, 0},
 		{Latest + 2, 0},
 		{Latest + 3, 0},
-		{Latest - Latest, 0},
+		{0, 0},
 	}
 	for i, test := range tests {
 		t.Logf(`test #%v exp version %d Types() to have length %v`, i, test.ver, test.exp)
@@ -112,11 +112,11 @@ func TestVersionString(t *testing.T) {
 		{Version2, `Version(#2 [Go 1.7])`},
 		{Version3, `Version(#3 [Go 1.8])`},
 		{Version4, `Version(#4 [Go 1.9])`},
-		{Latest, `Version(#3 [Go 1.8])`},
-		{Latest + 1, `Version(#4 [Go 1.9])`},
-		{Latest + 2, `Version(none)`},
+		{Latest, `Version(#4 [Go 1.9])`},
+		{Latest + 1, `Version(none)`},
 		{Latest + 3, `Version(none)`},
-		{Latest - Latest, `Version(none)`},
+		{Latest + 2, `Version(none)`},
+		{0, `Version(none)`},
 	}
 	for i, test := range tests {
 		t.Logf(`test #%v exp version %d String() to be %v`, i, test.ver, test.exp)

@@ -17,7 +17,7 @@ const (
 	Version4 Version = 4
 
 	// Latest always points to the newest released version for convenience.
-	Latest = Version3
+	Latest = Version4
 )
 
 // Arguments that may exist within an event, 1 or more of these are returned
@@ -40,6 +40,7 @@ const (
 	ArgGomaxprocs     = `Gomaxprocs`
 	ArgHeapAlloc      = `HeapAlloc`
 	ArgNextGC         = `NextGC`
+	ArgKind           = `Kind`
 )
 
 // Version of Go declared in the header of the trace. Each version is
@@ -139,8 +140,8 @@ var schemas = [...]schema{
 	{"GCStart", Version1, []string{
 		ArgTimestamp, ArgSequenceGC, ArgStackID}},
 	{"GCDone", Version1, []string{ArgTimestamp}},
-	{"GCScanStart", Version1, []string{ArgTimestamp}},
-	{"GCScanDone", Version1, []string{ArgTimestamp}},
+	{"GCSTWStart", Version1, []string{ArgTimestamp, ArgKind}},
+	{"GCSTWDone", Version1, []string{ArgTimestamp}},
 	{"GCSweepStart", Version1, []string{ArgTimestamp, ArgStackID}},
 	{"GCSweepDone", Version1, []string{ArgTimestamp}},
 	{"GoCreate", Version1, []string{
