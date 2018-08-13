@@ -5,11 +5,13 @@ os:
   - osx
 
 go:
-  - 1.8
+  - 1.9.x
+  - 1.10.x
+  - master
 
 matrix:
   allow_failures:
-    - go: tip
+    - go: master
 
 before_install:
   - go get -t -v ./...
