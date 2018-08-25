@@ -121,6 +121,8 @@ func encodeHeader(w io.Writer, v event.Version) (err error) {
 		n, err = w.Write([]byte("go 1.8 trace\x00\x00\x00\x00"))
 	case event.Version4:
 		n, err = w.Write([]byte("go 1.9 trace\x00\x00\x00\x00"))
+	case event.Version5:
+		n, err = w.Write([]byte("go 1.11 trace\x00\x00\x00"))
 	default:
 		err = errors.New(`trace header version was invalid`)
 	}

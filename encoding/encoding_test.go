@@ -116,6 +116,9 @@ func TestEncodingVersion(t *testing.T) {
 		{1, verFn(`1.5`), nil},
 		{2, verFn(`1.7`), nil},
 		{3, verFn(`1.8`), nil},
+		{4, verFn(`1.9`), nil},
+		{4, verFn(`1.10`), nil},
+		{5, verFn(`1.11`), nil},
 		{0, verFn(`1.8.0`), true},
 		{0, verFn(`1.4`), true},
 		{0, verFn(`1.4.0`), true},
@@ -431,6 +434,11 @@ var testEventsV3 = append(testEventsV2, []testDecodeEvent{
 }...)
 
 var testEventsV4 = append(testEventsV3, []testDecodeEvent{
+	{event.EvGCMarkAssistStart, []uint64{0xc42, 0x2a}, []byte{0x6b, 0xc2, 0x18, 0x2a}},
+	{event.EvGCMarkAssistDone, []uint64{0x1}, []byte{0x2c, 0x1}},
+}...)
+
+var testEventsV5 = append(testEventsV3, []testDecodeEvent{
 	{event.EvGCMarkAssistStart, []uint64{0xc42, 0x2a}, []byte{0x6b, 0xc2, 0x18, 0x2a}},
 	{event.EvGCMarkAssistDone, []uint64{0x1}, []byte{0x2c, 0x1}},
 }...)

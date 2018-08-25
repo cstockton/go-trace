@@ -175,8 +175,6 @@ func (s *state) ReadByte() (b byte, err error) {
 	return
 }
 
-var headerLut = [9]byte{'t', 'r', 'a', 'c', 'e', 0, 0, 0, 0}
-
 // decodeHeader will read a valid trace header consisting of exactly 16 bytes
 // from r, updating state or returning an error on failure.
 func decodeHeader(s *state) error {
@@ -197,30 +195,55 @@ func decodeHeader(s *state) error {
 	// Small lookahead here for more intuitive error reporting.
 	// "go 1.8 trace\x00\x00\x00\x00"
 	//  xxx++-+|-----------------------
-	if b[3] != '1' || b[4] != '.' || b[6] != ' ' {
+	if b[3] != '1' || b[4] != '.' {
+		fmt.Println("B:", b[:])
 		return errors.New(`trace header version was malformed`)
 	}
 
-	// "go 1.8 trace\x00\x00\x00\x00"
-	//  xxxxx+x|----------------------
+	// Lookahead for 1.xx or 1.x check.
+	if b[6] == ' ' {
+		return decodeVersion1x(s, b[:])
+	}
+	return decodeVersion1xx(s, b[:])
+}
+
+var headerLut1x = [9]byte{'t', 'r', 'a', 'c', 'e', 0, 0, 0, 0}
+
+func decodeVersion1x(s *state, b []byte) error {
+	if !bytes.Equal(headerLut1xx[:], b) {
+		return errors.New(`trace header suffix for 1.x version was malformed`)
+	}
 	switch b[5] {
-	case '5':
-		s.ver = event.Version1
-	case '7':
-		s.ver = event.Version2
-	case '8':
-		s.ver = event.Version3
 	case '9':
 		s.ver = event.Version4
+	case '8':
+		s.ver = event.Version3
+	case '7':
+		s.ver = event.Version2
+	case '5':
+		s.ver = event.Version1
 	default:
-		return errors.New(`trace header version was malformed`)
+		return fmt.Errorf(`trace header minor version 1.%v is unknown`, b[5])
 	}
+	return nil
+}
 
-	// "go 1.8 trace\x00\x00\x00\x00"
-	//  xxxxxx++++++++++++++++++++++|
-	if !bytes.Equal(headerLut[:], b[7:]) {
-		s.ver = 0
+var headerLut1xx = [9]byte{'t', 'r', 'a', 'c', 'e', 0, 0, 0}
+
+func decodeVersion1xx(s *state, b []byte) error {
+	if b[5] != '1' {
+		return errors.New(`trace header minor version was malformed`)
+	}
+	if !bytes.Equal(headerLut1xx[:], b) {
 		return errors.New(`trace header suffix was malformed`)
+	}
+	switch b[6] {
+	case '1':
+		s.ver = event.Version5
+	case '0':
+		s.ver = event.Version4
+	default:
+		return fmt.Errorf(`trace header minor version 1.1%v is unknown`, b[6])
 	}
 	return nil
 }

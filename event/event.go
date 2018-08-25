@@ -64,7 +64,11 @@ const (
 	EvGoBlockGC         Type = 42 // goroutine blocks on GC assist [timestamp, stack]
 	EvGCMarkAssistStart Type = 43 // GC mark assist start [timestamp, stack]
 	EvGCMarkAssistDone  Type = 44 // GC mark assist done [timestamp]
-	EvCount             Type = 45
+	EvUserTaskCreate    Type = 45 // trace.NewContext [timestamp, internal task id, internal parent task id, stack, name string]
+	EvUserTaskEnd       Type = 46 // end of a task [timestamp, internal task id, stack]
+	EvUserRegion        Type = 47 // trace.WithRegion [timestamp, internal task id, mode(0:start, 1:end), stack, name string]
+	EvUserLog           Type = 48 // trace.Log [timestamp, internal task id, key string id, stack, value string]
+	EvCount             Type = 49
 )
 
 // Type represents the type of trace event.

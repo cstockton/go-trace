@@ -2,6 +2,23 @@ package event
 
 import "fmt"
 
+// Version information:
+//
+//   Version1 - Go version 1.5 - 2015/08/19
+//     Initial release & events
+//
+//   Version2 - Go version 1.7 - 2016/08/15
+//     Added EvString, and local events
+//
+//   Version3 - Go version 1.8 - 2017/02/16
+//     Added StartLabel and BlockGC.
+//
+//   Version4 - Go version 1.9 - 2017/08/24
+//     Added gc mark assist start/done
+//
+//   Version5 - Go version 1.11 - 2018/08/24
+//     Added user events api.
+//
 const (
 
 	// Version1 was released in Go version 1.5 - 2015/08/19
@@ -13,11 +30,14 @@ const (
 	// Version3 was released in Go version 1.8 - 2017/02/16
 	Version3 Version = 3
 
-	// Version4 is in tip, currently marked in the header as 1.9.
+	// Version4 was released in Go version 1.9 - 2017/08/24
 	Version4 Version = 4
 
+	// Version6 was released in Go version 1.11 - 2018/08/24
+	Version5 Version = 5
+
 	// Latest always points to the newest released version for convenience.
-	Latest = Version4
+	Latest = Version5
 )
 
 // Arguments that may exist within an event, 1 or more of these are returned
@@ -41,6 +61,12 @@ const (
 	ArgHeapAlloc      = `HeapAlloc`
 	ArgNextGC         = `NextGC`
 	ArgKind           = `Kind`
+	ArgTaskID         = `TaskID`
+	ArgTaskParentID   = `TaskParentID`
+	ArgTaskMode       = `TaskMode`
+	ArgKeyID          = `KeyID`
+	ArgValueID        = `ValueID`
+	ArgNameID         = `NameID`
 )
 
 // Version of Go declared in the header of the trace. Each version is
@@ -51,7 +77,7 @@ type Version byte
 // Valid returns true if this version object is from a valid trace header, false
 // otherwise.
 func (v Version) Valid() bool {
-	return Version1 <= v && v <= Version4
+	return Version1 <= v && v <= Version5
 }
 
 // Go returns the version of Go this version was released with.
@@ -117,6 +143,7 @@ var versions = [...]version{
 	Version2: {gover: `1.7`, frameSize: 4},
 	Version3: {gover: `1.8`, frameSize: 4},
 	Version4: {gover: `1.9`, frameSize: 4},
+	Version5: {gover: `1.11`, frameSize: 4},
 }
 
 type schema struct {
@@ -183,4 +210,20 @@ var schemas = [...]schema{
 	{"GoBlockGC", Version3, []string{ArgTimestamp, ArgStackID}},
 	{"EvGCMarkAssistStart", Version4, []string{ArgTimestamp, ArgStackID}},
 	{"EvGCMarkAssistDone", Version4, []string{ArgTimestamp}},
+
+	// [timestamp, internal task id, internal parent task id, stack, name string]
+	{"EvUserTaskCreate", Version5, []string{
+		ArgTimestamp, ArgTaskID, ArgTaskParentID, ArgStackID, ArgNameID}},
+
+	// [timestamp, internal task id, stack]
+	{"EvUserTaskEnd", Version5, []string{
+		ArgTimestamp, ArgTaskID, ArgStackID}},
+
+	// [timestamp, internal task id, mode(0:start, 1:end), stack, name string]
+	{"EvUserRegion", Version5, []string{
+		ArgTimestamp, ArgTaskID, ArgTaskMode, ArgStackID, ArgNameID}},
+
+	// trace.Log [timestamp, internal task id, key string id, stack, value string]
+	{"EvUserLog", Version5, []string{
+		ArgTimestamp, ArgTaskID, ArgKeyID, ArgStackID, ArgValueID}},
 }

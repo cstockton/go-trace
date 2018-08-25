@@ -17,6 +17,7 @@ var (
 		event.Version2,
 		event.Version3,
 		event.Version4,
+		event.Version5,
 	}
 )
 
